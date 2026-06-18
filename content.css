@@ -10,24 +10,39 @@
   top: 16px;
   right: 16px;
   z-index: 2147483647;
+  display: block;
   width: min(328px, calc(100vw - 32px));
+  height: auto;
+  min-height: 0;
+  max-height: none;
   color: #1d232b;
   background: #ffffff;
   border: 1px solid #c9d3df;
   border-radius: 8px;
   box-shadow: 0 16px 36px rgba(20, 31, 43, 0.18);
-  overflow: hidden;
   line-height: 1.35;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 #jobdatelens-badge .jdl-header {
+  position: static;
   display: grid;
   grid-template-columns: 1fr auto auto;
   gap: 8px;
   align-items: center;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
   padding: 10px 10px 8px 12px;
   background: #f7f9fb;
   border-bottom: 1px solid #e1e7ee;
+  line-height: 1.35;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 #jobdatelens-badge.jdl-badge--collapsed .jdl-header {
@@ -35,23 +50,42 @@
 }
 
 #jobdatelens-badge .jdl-title {
+  position: static;
+  display: block;
   min-width: 0;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  padding: 0;
   font-size: 13px;
   font-weight: 700;
+  line-height: 1.25;
   color: #18222f;
   white-space: nowrap;
   overflow: hidden;
+  overflow-wrap: normal;
   text-overflow: ellipsis;
 }
 
 #jobdatelens-badge .jdl-status {
+  position: static;
+  display: block;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
   max-width: 116px;
+  margin: 0;
   padding: 3px 8px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 700;
+  line-height: 1.25;
   white-space: nowrap;
   overflow: hidden;
+  overflow-wrap: normal;
   text-overflow: ellipsis;
 }
 
@@ -72,8 +106,19 @@
 }
 
 #jobdatelens-badge .jdl-actions {
+  position: static;
   display: flex;
   gap: 4px;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  line-height: 1;
+  overflow: visible;
+  overflow-wrap: normal;
+  white-space: normal;
 }
 
 #jobdatelens-badge .jdl-icon-button {
@@ -97,9 +142,19 @@
 }
 
 #jobdatelens-badge .jdl-body {
+  position: static;
   display: grid;
+  grid-auto-rows: auto;
   gap: 8px;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
   padding: 10px 12px 12px;
+  line-height: 1.35;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 #jobdatelens-badge.jdl-badge--collapsed .jdl-body {
@@ -107,32 +162,91 @@
 }
 
 #jobdatelens-badge .jdl-row {
+  position: static;
   display: grid;
   grid-template-columns: 84px minmax(0, 1fr);
   gap: 8px;
   align-items: start;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  line-height: 1.25;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 #jobdatelens-badge .jdl-label {
+  position: static;
+  display: block;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  padding: 0;
   color: #667485;
   font-size: 11px;
   font-weight: 700;
+  line-height: 1.1;
   text-transform: uppercase;
+  overflow: visible;
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+
+#jobdatelens-badge .jdl-value-wrap {
+  position: static;
+  display: block;
+  min-width: 0;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  line-height: 1.25;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 #jobdatelens-badge .jdl-value {
+  position: static;
+  display: block;
   min-width: 0;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  padding: 0;
   color: #1d232b;
   font-size: 12px;
   font-weight: 650;
+  line-height: 1.25;
+  overflow: visible;
   overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 #jobdatelens-badge .jdl-helper {
+  position: static;
+  display: block;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
   margin-top: 2px;
+  padding: 0;
   color: #536273;
   font-size: 11px;
   font-weight: 500;
+  line-height: 1.25;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 #jobdatelens-badge .jdl-value--problem {
@@ -155,7 +269,11 @@
   top: 16px;
   right: 16px;
   z-index: 2147483647;
+  display: block;
   width: min(300px, calc(100vw - 32px));
+  height: auto;
+  min-height: 0;
+  max-height: none;
   padding: 10px 12px;
   color: #1f2933;
   background: #ffffff;
@@ -165,6 +283,27 @@
   font-size: 13px;
   font-weight: 650;
   line-height: 1.35;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+#jobdatelens-notice > div {
+  position: static;
+  display: block;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  color: #1f2933;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 #jobdatelens-notice .jdl-notice-helper {
@@ -172,4 +311,5 @@
   color: #617182;
   font-size: 11px;
   font-weight: 500;
+  line-height: 1.35;
 }
