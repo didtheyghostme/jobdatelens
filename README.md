@@ -9,7 +9,17 @@ Chrome extension that shows `datePosted` and `validThrough` from `JobPosting` JS
 3. Click **Load unpacked**.
 4. Select this repository folder.
 
-The extension scans `http` and `https` pages locally for `<script type="application/ld+json">` blocks. It does not call a backend, send page data anywhere, or request storage permissions.
+## Use
+
+JobDateLens does not scan every page automatically. It checks the current page only when you trigger it:
+
+- macOS: press `Option+Shift+E`.
+- Other platforms: press `Alt+Shift+E`.
+- Or click the JobDateLens toolbar icon.
+
+Chrome shortcuts can be changed at `chrome://extensions/shortcuts`.
+
+The extension scans the active page locally for `<script type="application/ld+json">` blocks. It does not call a backend, send page data anywhere, or request storage permissions.
 
 ## Test
 

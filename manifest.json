@@ -3,12 +3,19 @@
   "name": "JobDateLens",
   "version": "0.1.0",
   "description": "Shows datePosted and validThrough from JobPosting JSON-LD on job posting pages.",
-  "content_scripts": [
-    {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["content.js"],
-      "css": ["content.css"],
-      "run_at": "document_idle"
+  "permissions": ["activeTab", "scripting"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Scan this page with JobDateLens"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+E",
+        "mac": "Option+Shift+E"
+      }
     }
-  ]
+  }
 }

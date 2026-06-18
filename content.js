@@ -2,9 +2,14 @@
   "use strict";
 
   var BADGE_ID = "jobdatelens-badge";
+  var NOTICE_ID = "jobdatelens-notice";
   var SCRIPT_TYPE = "application/ld+json";
   var DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
   var MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+  if (typeof window !== "undefined" && window.JobDateLens && window.JobDateLens.scanOnce) {
+    return;
+  }
 
   function normalizeWhitespace(value) {
     return String(value || "").replace(/\s+/g, " ").trim();
@@ -522,21 +527,56 @@
     };
   }
 
-  function bootContentScript() {
-    var scanTimer = null;
-    var lastSignature = "";
+  function installBrowserApi() {
     var currentUrl = window.location.href;
-    var dismissed = false;
     var collapsed = false;
-    var urlPoller = null;
+    var noticeTimer = null;
 
     function resetInteractionForNewUrl() {
       if (window.location.href !== currentUrl) {
         currentUrl = window.location.href;
-        dismissed = false;
         collapsed = false;
-        lastSignature = "";
       }
+    }
+
+    function removeNotice() {
+      var existing = document.getElementById(NOTICE_ID);
+      if (existing) {
+        existing.remove();
+      }
+      window.clearTimeout(noticeTimer);
+      noticeTimer = null;
+    }
+
+    function showNotice(message, helper) {
+      var notice;
+      var messageNode;
+      var helperNode;
+
+      if (!document.body) {
+        return;
+      }
+
+      removeNotice();
+
+      notice = document.createElement("aside");
+      notice.id = NOTICE_ID;
+      notice.setAttribute("role", "status");
+      notice.setAttribute("aria-live", "polite");
+
+      messageNode = document.createElement("div");
+      messageNode.textContent = message;
+      notice.appendChild(messageNode);
+
+      if (helper) {
+        helperNode = document.createElement("div");
+        helperNode.className = "jdl-notice-helper";
+        helperNode.textContent = helper;
+        notice.appendChild(helperNode);
+      }
+
+      document.body.appendChild(notice);
+      noticeTimer = window.setTimeout(removeNotice, 3600);
     }
 
     function renderBadge(scanResult) {
@@ -551,10 +591,12 @@
       var body;
       var expiryState;
 
-      if (!scanResult.selected || dismissed) {
+      if (!scanResult.selected) {
         removeBadge();
         return;
       }
+
+      removeNotice();
 
       model = formatJobPosting(scanResult.selected, new Date());
       expiryState = model.status.kind === "expired" ? "expired" : model.validThrough.state;
@@ -604,10 +646,7 @@
       closeButton.title = "Close JobDateLens for this page";
       closeButton.setAttribute("aria-label", closeButton.title);
       closeButton.textContent = "x";
-      closeButton.addEventListener("click", function () {
-        dismissed = true;
-        removeBadge();
-      });
+      closeButton.addEventListener("click", removeBadge);
 
       actions.appendChild(toggleButton);
       actions.appendChild(closeButton);
@@ -629,123 +668,38 @@
       badge.replaceChildren(header, body);
     }
 
-    function makeSignature(scanResult) {
-      if (!scanResult.selected) {
-        return JSON.stringify({
-          url: window.location.href,
-          count: 0,
-          errors: scanResult.errors.length
-        });
-      }
-
-      return JSON.stringify({
-        url: window.location.href,
-        count: scanResult.candidates.length,
-        title: scanResult.selected.title,
-        company: scanResult.selected.company,
-        datePosted: scanResult.selected.datePostedRaw,
-        validThrough: scanResult.selected.validThroughRaw,
-        selectedIndex: scanResult.selected.selectedIndex,
-        errors: scanResult.errors.length
-      });
-    }
-
-    function scanPage() {
+    function scanOnce() {
       var result;
-      var signature;
 
       if (!document.body) {
-        return;
+        return {
+          found: false,
+          candidates: 0,
+          errors: 0,
+          reason: "document-not-ready"
+        };
       }
 
       resetInteractionForNewUrl();
 
       result = scanJsonLdTexts(collectJsonLdScriptTexts(document), getPageContext(document));
-      signature = makeSignature(result);
 
-      if (signature !== lastSignature || !document.getElementById(BADGE_ID)) {
-        lastSignature = signature;
+      if (result.selected) {
         renderBadge(result);
-      }
-    }
-
-    function scheduleScan() {
-      window.clearTimeout(scanTimer);
-      scanTimer = window.setTimeout(scanPage, 120);
-    }
-
-    function isBadgeNode(node) {
-      if (!node || node.nodeType !== Node.ELEMENT_NODE) {
-        return false;
-      }
-      return node.id === BADGE_ID || Boolean(node.closest && node.closest("#" + BADGE_ID));
-    }
-
-    function isJsonLdScriptNode(node) {
-      if (!node || node.nodeType !== Node.ELEMENT_NODE) {
-        return false;
-      }
-      return (
-        node.tagName === "SCRIPT" &&
-        isJsonLdType(node.getAttribute("type"))
-      );
-    }
-
-    function nodeContainsJsonLdScript(node) {
-      if (!node || node.nodeType !== Node.ELEMENT_NODE || isBadgeNode(node)) {
-        return false;
-      }
-      return (
-        isJsonLdScriptNode(node) ||
-        Boolean(
-          node.querySelectorAll &&
-            Array.prototype.some.call(node.querySelectorAll("script[type]"), isJsonLdScriptNode)
-        )
-      );
-    }
-
-    function mutationTouchesJsonLd(mutation) {
-      var parent;
-
-      if (isBadgeNode(mutation.target)) {
-        return false;
+      } else {
+        removeBadge();
+        showNotice("No JobPosting JSON-LD found", "Try again after the job page finishes loading.");
       }
 
-      if (mutation.type === "characterData") {
-        parent = mutation.target.parentElement;
-        return isJsonLdScriptNode(parent);
-      }
-
-      return (
-        Array.prototype.some.call(mutation.addedNodes, nodeContainsJsonLdScript) ||
-        Array.prototype.some.call(mutation.removedNodes, nodeContainsJsonLdScript)
-      );
+      return {
+        found: Boolean(result.selected),
+        candidates: result.candidates.length,
+        errors: result.errors.length
+      };
     }
 
-    function startObserver() {
-      var observer = new MutationObserver(function (mutations) {
-        if (window.location.href !== currentUrl || mutations.some(mutationTouchesJsonLd)) {
-          scheduleScan();
-        }
-      });
-
-      observer.observe(document.documentElement, {
-        childList: true,
-        subtree: true,
-        characterData: true
-      });
-    }
-
-    scanPage();
-    startObserver();
-    urlPoller = window.setInterval(function () {
-      if (window.location.href !== currentUrl) {
-        scheduleScan();
-      }
-    }, 1000);
-
-    window.addEventListener("pagehide", function () {
-      window.clearInterval(urlPoller);
+    window.JobDateLens = Object.assign({}, api, {
+      scanOnce: scanOnce
     });
   }
 
@@ -765,10 +719,6 @@
   }
 
   if (typeof document !== "undefined" && typeof window !== "undefined") {
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", bootContentScript, { once: true });
-    } else {
-      bootContentScript();
-    }
+    installBrowserApi();
   }
 })();
