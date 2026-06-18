@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "JobDateLens",
+  "version": "0.1.0",
+  "description": "Shows datePosted and validThrough from JobPosting JSON-LD on job posting pages.",
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

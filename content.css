@@ -1,0 +1,144 @@
+#jobdatelens-badge,
+#jobdatelens-badge * {
+  box-sizing: border-box;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0;
+}
+
+#jobdatelens-badge {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 2147483647;
+  width: min(328px, calc(100vw - 32px));
+  color: #1d232b;
+  background: #ffffff;
+  border: 1px solid #c9d3df;
+  border-radius: 8px;
+  box-shadow: 0 16px 36px rgba(20, 31, 43, 0.18);
+  overflow: hidden;
+  line-height: 1.35;
+}
+
+#jobdatelens-badge .jdl-header {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 10px 8px 12px;
+  background: #f7f9fb;
+  border-bottom: 1px solid #e1e7ee;
+}
+
+#jobdatelens-badge.jdl-badge--collapsed .jdl-header {
+  border-bottom: 0;
+}
+
+#jobdatelens-badge .jdl-title {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #18222f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#jobdatelens-badge .jdl-status {
+  max-width: 116px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#jobdatelens-badge.jdl-status--open .jdl-status {
+  color: #0f5132;
+  background: #d8f3dc;
+}
+
+#jobdatelens-badge.jdl-status--expired .jdl-status {
+  color: #7f1d1d;
+  background: #fee2e2;
+}
+
+#jobdatelens-badge.jdl-status--missing .jdl-status,
+#jobdatelens-badge.jdl-status--warning .jdl-status {
+  color: #6b3f00;
+  background: #fff1c2;
+}
+
+#jobdatelens-badge .jdl-actions {
+  display: flex;
+  gap: 4px;
+}
+
+#jobdatelens-badge .jdl-icon-button {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #ccd6e2;
+  border-radius: 6px;
+  color: #2f3b4a;
+  background: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+#jobdatelens-badge .jdl-icon-button:hover {
+  background: #eef3f8;
+}
+
+#jobdatelens-badge .jdl-body {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px 12px;
+}
+
+#jobdatelens-badge.jdl-badge--collapsed .jdl-body {
+  display: none;
+}
+
+#jobdatelens-badge .jdl-row {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+#jobdatelens-badge .jdl-label {
+  color: #667485;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+#jobdatelens-badge .jdl-value {
+  min-width: 0;
+  color: #1d232b;
+  font-size: 12px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+#jobdatelens-badge .jdl-helper {
+  margin-top: 2px;
+  color: #536273;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+#jobdatelens-badge .jdl-value--problem {
+  color: #8a4b00;
+}
+
+#jobdatelens-badge .jdl-value--expired {
+  color: #9f1239;
+}

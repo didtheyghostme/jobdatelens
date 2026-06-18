@@ -1,0 +1,9 @@
+{
+  "name": "jobdatelens",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome extension that shows datePosted and validThrough from JobPosting JSON-LD on job pages.",
+  "scripts": {
+    "test": "node --test tests/parser.test.js"
+  }
+}
