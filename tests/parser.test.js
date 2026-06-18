@@ -167,6 +167,59 @@ test("records malformed JSON-LD errors without selecting a posting", () => {
   assert.equal(result.selected, null);
 });
 
+test("uses a loading notice when no JobPosting is found before the page completes", () => {
+  const result = scan([]);
+  const notice = jobDateLens.getNoResultNotice(result, [], "interactive");
+
+  assert.deepEqual(notice, {
+    message: "Job page is still loading",
+    helper: "Try again shortly if the job dates do not appear."
+  });
+});
+
+test("uses a no structured data notice when a complete page has no JSON-LD", () => {
+  const result = scan([]);
+  const notice = jobDateLens.getNoResultNotice(result, [], "complete");
+
+  assert.deepEqual(notice, {
+    message: "No structured job data found",
+    helper: "JobDateLens only reads schema.org JobPosting JSON-LD."
+  });
+});
+
+test("uses a no JobPosting notice when JSON-LD has no job posting", () => {
+  const jsonLdText = json({
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    url: "https://example.com"
+  });
+  const result = scan(jsonLdText);
+  const notice = jobDateLens.getNoResultNotice(result, [jsonLdText], "complete");
+
+  assert.deepEqual(notice, {
+    message: "No JobPosting JSON-LD found",
+    helper: "This page has structured data, but not schema.org JobPosting data."
+  });
+});
+
+test("uses an unreadable structured data notice when all JSON-LD is malformed", () => {
+  const jsonLdText = '{"@context":"https://schema.org","@type":"JobPosting","title":"Broken Role",}';
+  const result = scan(jsonLdText);
+  const notice = jobDateLens.getNoResultNotice(result, [jsonLdText], "complete");
+
+  assert.deepEqual(notice, {
+    message: "Structured job data could not be read",
+    helper: "The page includes JSON-LD, but it is not valid JSON."
+  });
+});
+
+test("does not return a no-result notice when a JobPosting is selected", () => {
+  const jsonLdText = json(jobPosting());
+  const result = scan(jsonLdText);
+
+  assert.equal(jobDateLens.getNoResultNotice(result, [jsonLdText], "loading"), null);
+});
+
 test("surfaces missing datePosted as an explicit state", () => {
   const result = scan(json(jobPosting({ datePosted: undefined })));
   const model = jobDateLens.formatJobPosting(result.selected, new Date(2026, 5, 18, 12));

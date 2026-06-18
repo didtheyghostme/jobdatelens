@@ -330,6 +330,42 @@
     };
   }
 
+  function getNoResultNotice(scanResult, jsonLdTexts, readyState) {
+    var result = scanResult || {};
+    var texts = jsonLdTexts || [];
+    var errors = Array.isArray(result.errors) ? result.errors : [];
+
+    if (result.selected) {
+      return null;
+    }
+
+    if (readyState && readyState !== "complete") {
+      return {
+        message: "Job page is still loading",
+        helper: "Try again shortly if the job dates do not appear."
+      };
+    }
+
+    if (!texts.length) {
+      return {
+        message: "No structured job data found",
+        helper: "JobDateLens only reads schema.org JobPosting JSON-LD."
+      };
+    }
+
+    if (errors.length === texts.length) {
+      return {
+        message: "Structured job data could not be read",
+        helper: "The page includes JSON-LD, but it is not valid JSON."
+      };
+    }
+
+    return {
+      message: "No JobPosting JSON-LD found",
+      helper: "This page has structured data, but not schema.org JobPosting data."
+    };
+  }
+
   function startOfLocalDay(date) {
     return new Date(date.getFullYear(), date.getMonth(), date.getDate());
   }
@@ -670,6 +706,8 @@
 
     function scanOnce() {
       var result;
+      var jsonLdTexts;
+      var notice;
 
       if (!document.body) {
         return {
@@ -682,13 +720,15 @@
 
       resetInteractionForNewUrl();
 
-      result = scanJsonLdTexts(collectJsonLdScriptTexts(document), getPageContext(document));
+      jsonLdTexts = collectJsonLdScriptTexts(document);
+      result = scanJsonLdTexts(jsonLdTexts, getPageContext(document));
 
       if (result.selected) {
         renderBadge(result);
       } else {
         removeBadge();
-        showNotice("No JobPosting JSON-LD found", "Try again after the job page finishes loading.");
+        notice = getNoResultNotice(result, jsonLdTexts, document.readyState);
+        showNotice(notice.message, notice.helper);
       }
 
       return {
@@ -707,6 +747,7 @@
     parseJsonLdText: parseJsonLdText,
     extractJobPostingsFromJsonLd: extractJobPostingsFromJsonLd,
     scanJsonLdTexts: scanJsonLdTexts,
+    getNoResultNotice: getNoResultNotice,
     selectBestJobPosting: selectBestJobPosting,
     scoreCandidate: scoreCandidate,
     parseSchemaDate: parseSchemaDate,
