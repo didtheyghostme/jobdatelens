@@ -19,4 +19,6 @@ Run the parser tests with Node:
 npm test
 ```
 
-The tests use local HTML fixtures under `tests/fixtures` and cover standard JSON-LD, arrays, `@graph`, multiple candidates, missing or invalid dates, expired postings, malformed JSON, non-job structured data, and dynamically inserted JSON-LD payloads.
+The tests use inline JSON-LD samples and cover standard JSON-LD, arrays, `@graph`, multiple candidates, missing or invalid dates, expired postings, malformed JSON, and non-job structured data.
+
+For manual UI testing, load the extension unpacked in Chrome and visit a real job posting page that includes `JobPosting` JSON-LD.
