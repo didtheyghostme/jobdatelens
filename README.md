@@ -13,7 +13,7 @@ Chrome extension that shows `datePosted` and `validThrough` from `JobPosting` JS
 
 JobDateLens does not scan every page automatically. It checks the current page only when you trigger it:
 
-- macOS: press `Option+Shift+E`.
+- macOS: press `Command+Shift+E`.
 - Other platforms: press `Alt+Shift+E`.
 - Or click the JobDateLens toolbar icon.
 
