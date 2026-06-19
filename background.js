@@ -6,9 +6,35 @@ var SHORTCUT_UNASSIGNED_TITLE =
   "JobDateLens shortcut was not assigned. Existing shortcuts were not changed. Set one at chrome://extensions/shortcuts.";
 var SHORTCUT_WARNING_BADGE_TEXT = "!";
 var SHORTCUT_WARNING_BADGE_COLOR = "#D97706";
+var FETCH_HTML_FALLBACK_MESSAGE = "jobdatelens:fetchHtmlFallback";
 
 function isSupportedPageUrl(url) {
   return typeof url === "string" && /^https?:\/\//i.test(url);
+}
+
+function getCanonicalLeverPostingUrl(value) {
+  var parsed;
+  var pathSegments;
+
+  try {
+    parsed = new URL(String(value || ""));
+  } catch (error) {
+    return null;
+  }
+
+  if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "jobs.lever.co") {
+    return null;
+  }
+
+  pathSegments = parsed.pathname.split("/").filter(Boolean);
+  if (
+    pathSegments.length === 2 ||
+    (pathSegments.length === 3 && pathSegments[2] === "apply")
+  ) {
+    return parsed.origin + "/" + pathSegments[0] + "/" + pathSegments[1];
+  }
+
+  return null;
 }
 
 function getCommandByName(commands, commandName) {
@@ -136,8 +162,63 @@ async function handleActionClick(tab) {
   await scanTab(tab);
 }
 
+async function handleFetchHtmlFallbackMessage(request, fetchImpl) {
+  var fallbackUrl = getCanonicalLeverPostingUrl(request && request.url);
+  var fetcher;
+  var response;
+  var htmlText;
+
+  if (!fallbackUrl) {
+    return {
+      ok: false,
+      message: "Unsupported fallback URL."
+    };
+  }
+
+  fetcher = fetchImpl || fetch;
+
+  try {
+    response = await fetcher(fallbackUrl, {
+      cache: "no-store",
+      credentials: "omit"
+    });
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message: "HTTP " + response.status
+      };
+    }
+
+    htmlText = await response.text();
+    return {
+      ok: true,
+      htmlText: htmlText,
+      url: fallbackUrl
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error && error.message ? error.message : String(error)
+    };
+  }
+}
+
+function handleRuntimeMessage(request, sender, sendResponse) {
+  if (!request || request.type !== FETCH_HTML_FALLBACK_MESSAGE) {
+    return false;
+  }
+
+  handleFetchHtmlFallbackMessage(request).then(sendResponse);
+  return true;
+}
+
 if (typeof chrome !== "undefined" && chrome.action && chrome.action.onClicked) {
   chrome.action.onClicked.addListener(handleActionClick);
+
+  if (chrome.runtime && chrome.runtime.onMessage) {
+    chrome.runtime.onMessage.addListener(handleRuntimeMessage);
+  }
 
   if (chrome.runtime && chrome.runtime.onInstalled && chrome.commands && chrome.commands.getAll) {
     chrome.runtime.onInstalled.addListener(warnIfShortcutUnassignedOnInstall);
@@ -147,7 +228,11 @@ if (typeof chrome !== "undefined" && chrome.action && chrome.action.onClicked) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     EXECUTE_ACTION_COMMAND: EXECUTE_ACTION_COMMAND,
+    FETCH_HTML_FALLBACK_MESSAGE: FETCH_HTML_FALLBACK_MESSAGE,
+    getCanonicalLeverPostingUrl: getCanonicalLeverPostingUrl,
     getCommandByName: getCommandByName,
+    handleFetchHtmlFallbackMessage: handleFetchHtmlFallbackMessage,
+    handleRuntimeMessage: handleRuntimeMessage,
     isCommandShortcutUnassigned: isCommandShortcutUnassigned,
     isSupportedPageUrl: isSupportedPageUrl
   };

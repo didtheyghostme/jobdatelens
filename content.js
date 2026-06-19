@@ -8,15 +8,10 @@
   var MS_PER_DAY = 24 * 60 * 60 * 1000;
   var TRANSIENT_NOTICE_DURATION_MS = 3000;
   var HTML_FETCH_TIMEOUT_MS = 1500;
+  var FETCH_HTML_FALLBACK_MESSAGE = "jobdatelens:fetchHtmlFallback";
   var HTML_FALLBACK_CANONICALIZERS = {
     "jobs.lever.co": function (url) {
-      var pathSegments = url.pathname.split("/").filter(Boolean);
-
-      if (pathSegments.length === 3 && pathSegments[2] === "apply") {
-        return url.origin + "/" + pathSegments[0] + "/" + pathSegments[1];
-      }
-
-      return url.href;
+      return getCanonicalLeverPostingUrl(url.href) || url.href;
     }
   };
 
@@ -790,6 +785,31 @@
     return scanDocument(parseHtmlDocument(htmlText, parser), pageContext || {});
   }
 
+  function getCanonicalLeverPostingUrl(value) {
+    var parsed;
+    var pathSegments;
+
+    try {
+      parsed = new URL(String(value || ""));
+    } catch (error) {
+      return null;
+    }
+
+    if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "jobs.lever.co") {
+      return null;
+    }
+
+    pathSegments = parsed.pathname.split("/").filter(Boolean);
+    if (
+      pathSegments.length === 2 ||
+      (pathSegments.length === 3 && pathSegments[2] === "apply")
+    ) {
+      return parsed.origin + "/" + pathSegments[0] + "/" + pathSegments[1];
+    }
+
+    return null;
+  }
+
   function getHtmlFallbackUrl(currentUrl) {
     var original = String(currentUrl || "");
     var parsed;
@@ -807,6 +827,46 @@
     }
 
     return original;
+  }
+
+  function getLinkedLeverFallbackUrl(doc) {
+    var links;
+    var index;
+    var link;
+    var href;
+    var canonicalUrl;
+
+    if (!doc || typeof doc.querySelectorAll !== "function") {
+      return null;
+    }
+
+    links = Array.prototype.slice.call(doc.querySelectorAll("a[href]") || []);
+    for (index = 0; index < links.length; index += 1) {
+      link = links[index];
+      href =
+        link.href ||
+        (typeof link.getAttribute === "function" ? link.getAttribute("href") : "");
+      canonicalUrl = getCanonicalLeverPostingUrl(href);
+      if (canonicalUrl) {
+        return canonicalUrl;
+      }
+    }
+
+    return null;
+  }
+
+  function isCrossOriginUrl(targetUrl, pageUrl) {
+    var target;
+    var page;
+
+    try {
+      target = new URL(String(targetUrl || ""));
+      page = new URL(String(pageUrl || ""));
+    } catch (error) {
+      return false;
+    }
+
+    return target.origin !== page.origin;
   }
 
   function installBrowserApi() {
@@ -1029,6 +1089,81 @@
       });
     }
 
+    function fetchCrossOriginFallbackHtml(url) {
+      var timeoutId;
+
+      return new Promise(function (resolve, reject) {
+        var settled = false;
+
+        function finish(callback) {
+          return function (value) {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            window.clearTimeout(timeoutId);
+            callback(value);
+          };
+        }
+
+        var resolveOnce = finish(resolve);
+        var rejectOnce = finish(reject);
+
+        timeoutId = window.setTimeout(function () {
+          rejectOnce(new Error("Timed out after " + HTML_FETCH_TIMEOUT_MS + "ms."));
+        }, HTML_FETCH_TIMEOUT_MS);
+
+        if (
+          typeof chrome === "undefined" ||
+          !chrome.runtime ||
+          typeof chrome.runtime.sendMessage !== "function"
+        ) {
+          rejectOnce(new Error("Background HTML fetch is not available."));
+          return;
+        }
+
+        try {
+          chrome.runtime.sendMessage(
+            {
+              type: FETCH_HTML_FALLBACK_MESSAGE,
+              url: url
+            },
+            function (response) {
+              var lastError = chrome.runtime && chrome.runtime.lastError;
+
+              if (lastError) {
+                rejectOnce(new Error(lastError.message || "Background HTML fetch failed."));
+                return;
+              }
+
+              if (!response || !response.ok) {
+                rejectOnce(
+                  new Error(
+                    response && response.message
+                      ? response.message
+                      : "Background HTML fetch failed."
+                  )
+                );
+                return;
+              }
+
+              resolveOnce(response.htmlText || "");
+            }
+          );
+        } catch (error) {
+          rejectOnce(error);
+        }
+      });
+    }
+
+    function fetchHtmlFallback(url, pageUrl) {
+      if (isCrossOriginUrl(url, pageUrl) && getCanonicalLeverPostingUrl(url) === url) {
+        return fetchCrossOriginFallbackHtml(url);
+      }
+
+      return fetchCurrentPageHtml(url);
+    }
+
     async function scanOnce() {
       var scanId = activeScanId + 1;
       var pageContext;
@@ -1037,6 +1172,7 @@
       var notice;
       var pageUrl;
       var fallbackUrl;
+      var linkedFallbackUrl;
       var htmlText;
 
       activeScanId = scanId;
@@ -1083,8 +1219,12 @@
 
       pageUrl = window.location.href;
       fallbackUrl = getHtmlFallbackUrl(pageUrl);
+      linkedFallbackUrl = getLinkedLeverFallbackUrl(document);
+      if (fallbackUrl === pageUrl && linkedFallbackUrl) {
+        fallbackUrl = linkedFallbackUrl;
+      }
       try {
-        htmlText = await fetchCurrentPageHtml(fallbackUrl);
+        htmlText = await fetchHtmlFallback(fallbackUrl, pageUrl);
         if (scanId !== activeScanId) {
           return summarizeScan(null, "html", "scan-superseded");
         }
@@ -1137,7 +1277,9 @@
     parseSchemaDate: parseSchemaDate,
     scanDocument: scanDocument,
     scanHtmlText: scanHtmlText,
+    getCanonicalLeverPostingUrl: getCanonicalLeverPostingUrl,
     getHtmlFallbackUrl: getHtmlFallbackUrl,
+    getLinkedLeverFallbackUrl: getLinkedLeverFallbackUrl,
     formatJobPosting: formatJobPosting,
     isJsonLdType: isJsonLdType,
     HTML_FETCH_TIMEOUT_MS: HTML_FETCH_TIMEOUT_MS,

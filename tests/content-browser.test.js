@@ -73,6 +73,7 @@ function createFakeElement(document, tagName) {
 function createFakeDocument() {
   const document = {
     elementsById: {},
+    links: [],
     readyState: "complete",
     title: "Careers | Example",
     scripts: [],
@@ -85,6 +86,12 @@ function createFakeDocument() {
     },
     querySelector() {
       return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "a[href]") {
+        return this.links;
+      }
+      return [];
     }
   };
 
@@ -262,4 +269,97 @@ test("scanOnce keeps non-Lever apply pages on current URL HTML fallback", async 
   assert.equal(fetchedUrl, currentUrl);
   assert.equal(result.found, false);
   assert.equal(result.reason, "html-no-match");
+});
+
+test("scanOnce fetches linked Lever job HTML through the background service worker", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const currentUrl =
+    "https://www.binance.com/en/careers/job?id=b3f90add-c407-45c9-b306-05b06d9a8054";
+  const leverApplyUrl =
+    "https://jobs.lever.co/binance/b3f90add-c407-45c9-b306-05b06d9a8054/apply";
+  const leverCanonicalUrl =
+    "https://jobs.lever.co/binance/b3f90add-c407-45c9-b306-05b06d9a8054";
+  const html = "<!doctype html><title>Lever Job</title>";
+  const jsonLdText = JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "JobPosting",
+    title: "Binance Accelerator Program - AI Intelligence Efficiency Engineer",
+    datePosted: "2026-04-20",
+    hiringOrganization: {
+      "@type": "Organization",
+      name: "Binance"
+    }
+  });
+  const document = createFakeDocument();
+  const parsedDocument = createJsonLdDocument(jsonLdText);
+  let message = null;
+  let currentPageFetchCalled = false;
+
+  document.title = "Binance Job Details";
+  document.body.innerText =
+    "Binance Accelerator Program - AI Intelligence Efficiency Engineer Apply for this Job";
+  document.body.textContent = document.body.innerText;
+  document.links = [
+    {
+      href: leverApplyUrl
+    }
+  ];
+  document.querySelector = (selector) => {
+    if (selector === "h1") {
+      return {
+        textContent: "Binance Accelerator Program - AI Intelligence Efficiency Engineer"
+      };
+    }
+    return null;
+  };
+
+  const fakeWindow = {
+    location: {
+      href: currentUrl
+    },
+    setTimeout,
+    clearTimeout,
+    fetch() {
+      currentPageFetchCalled = true;
+      return Promise.reject(new Error("Current page fetch should not run"));
+    }
+  };
+  const fakeChrome = {
+    runtime: {
+      lastError: null,
+      sendMessage(request, callback) {
+        message = request;
+        callback({
+          ok: true,
+          htmlText: html,
+          url: leverCanonicalUrl
+        });
+      }
+    }
+  };
+  const context = vm.createContext({
+    chrome: fakeChrome,
+    console,
+    document,
+    DOMParser: class {
+      parseFromString(htmlText, type) {
+        assert.equal(htmlText, html);
+        assert.equal(type, "text/html");
+        return parsedDocument;
+      }
+    },
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+
+  const result = await fakeWindow.JobDateLens.scanOnce();
+
+  assert.equal(message.type, "jobdatelens:fetchHtmlFallback");
+  assert.equal(message.url, leverCanonicalUrl);
+  assert.equal(currentPageFetchCalled, false);
+  assert.equal(result.found, true);
+  assert.equal(result.source, "html");
+  assert.equal(document.getElementById("jobdatelens-badge").tagName, "ASIDE");
 });

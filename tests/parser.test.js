@@ -505,6 +505,55 @@ test("canonicalizes allowlisted Lever apply URLs for HTML fallback", () => {
   assert.equal(jobDateLens.getHtmlFallbackUrl("not a url"), "not a url");
 });
 
+test("extracts canonical Lever fallback URLs from rendered page links", () => {
+  const canonicalUrl =
+    "https://jobs.lever.co/binance/b3f90add-c407-45c9-b306-05b06d9a8054";
+  const document = {
+    querySelectorAll(selector) {
+      assert.equal(selector, "a[href]");
+      return [
+        {
+          href: "https://www.binance.com/en/careers"
+        },
+        {
+          href: `${canonicalUrl}/apply?source=binance`
+        }
+      ];
+    }
+  };
+
+  assert.equal(jobDateLens.getLinkedLeverFallbackUrl(document), canonicalUrl);
+});
+
+test("rejects unsafe or unsupported linked Lever fallback URLs", () => {
+  const documents = [
+    {
+      querySelectorAll() {
+        return [{ href: "https://jobs.lever.co.evil.com/binance/posting-id/apply" }];
+      }
+    },
+    {
+      querySelectorAll() {
+        return [{ href: "http://jobs.lever.co/binance/posting-id/apply" }];
+      }
+    },
+    {
+      querySelectorAll() {
+        return [{ href: "https://jobs.lever.co/binance/posting-id/extra" }];
+      }
+    },
+    {
+      querySelectorAll() {
+        return [{ href: "https://example.com/binance/posting-id/apply" }];
+      }
+    }
+  ];
+
+  documents.forEach((document) => {
+    assert.equal(jobDateLens.getLinkedLeverFallbackUrl(document), null);
+  });
+});
+
 test("scans fetched HTML text for matching JobPosting JSON-LD", () => {
   const html = '<!doctype html><script type="application/ld+json"></script>';
   const jsonLdText = json(
