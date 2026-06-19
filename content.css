@@ -274,7 +274,7 @@
   height: auto;
   min-height: 0;
   max-height: none;
-  padding: 10px 12px;
+  padding: 10px 36px 10px 12px;
   color: #1f2933;
   background: #ffffff;
   border: 1px solid #c9d3df;
@@ -312,4 +312,27 @@
   font-size: 11px;
   font-weight: 500;
   line-height: 1.35;
+}
+
+#jobdatelens-notice .jdl-notice-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #ccd6e2;
+  border-radius: 6px;
+  color: #2f3b4a;
+  background: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+#jobdatelens-notice .jdl-notice-close:hover {
+  background: #eef3f8;
 }

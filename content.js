@@ -6,6 +6,8 @@
   var SCRIPT_TYPE = "application/ld+json";
   var DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
   var MS_PER_DAY = 24 * 60 * 60 * 1000;
+  var TRANSIENT_NOTICE_DURATION_MS = 3000;
+  var HTML_FETCH_TIMEOUT_MS = 1500;
 
   if (typeof window !== "undefined" && window.JobDateLens && window.JobDateLens.scanOnce) {
     return;
@@ -225,6 +227,117 @@
     return hits / words.length;
   }
 
+  function getSignificantWords(value) {
+    var seen = {};
+
+    return normalizeSearchText(value)
+      .split(/[^a-z0-9]+/)
+      .filter(function (word) {
+        if (word.length <= 2 || seen[word]) {
+          return false;
+        }
+        seen[word] = true;
+        return true;
+      });
+  }
+
+  function countSharedWords(leftWords, rightWords) {
+    var rightLookup = {};
+    var count = 0;
+
+    rightWords.forEach(function (word) {
+      rightLookup[word] = true;
+    });
+
+    leftWords.forEach(function (word) {
+      if (rightLookup[word]) {
+        count += 1;
+      }
+    });
+
+    return count;
+  }
+
+  function titleSignalMatches(candidateTitle, signal) {
+    var candidate = normalizeSearchText(candidateTitle);
+    var normalizedSignal = normalizeSearchText(signal);
+    var candidateWords = getSignificantWords(candidateTitle);
+    var signalWords = getSignificantWords(signal);
+    var shared;
+
+    if (!candidate || !normalizedSignal) {
+      return false;
+    }
+
+    if (normalizedSignal.indexOf(candidate) !== -1) {
+      return true;
+    }
+
+    if (
+      candidateWords.length >= 2 &&
+      signalWords.length >= 2 &&
+      candidate.indexOf(normalizedSignal) !== -1
+    ) {
+      return true;
+    }
+
+    if (candidateWords.length < 2 || signalWords.length < 2) {
+      return false;
+    }
+
+    shared = countSharedWords(candidateWords, signalWords);
+    return shared >= 2 && shared / Math.min(candidateWords.length, signalWords.length) >= 0.75;
+  }
+
+  function titleSignalClearlyConflicts(candidateTitle, signal) {
+    var candidateWords = getSignificantWords(candidateTitle);
+    var signalWords = getSignificantWords(signal);
+    var shared;
+
+    if (titleSignalMatches(candidateTitle, signal)) {
+      return false;
+    }
+
+    if (candidateWords.length < 2 || signalWords.length < 2) {
+      return false;
+    }
+
+    shared = countSharedWords(candidateWords, signalWords);
+    return (
+      shared === 0 ||
+      (shared / candidateWords.length < 0.5 && shared / signalWords.length < 0.5)
+    );
+  }
+
+  function isLikelyPageTitleSignal(value) {
+    return /(@|\||\s+-\s+|\s+\u2013\s+|\s+\u2014\s+|\sat\s)/i.test(String(value || ""));
+  }
+
+  function isStaleJobPosting(candidate, pageContext) {
+    var context = pageContext || {};
+    var candidateTitle = candidate && candidate.title;
+    var heading = context.heading || "";
+    var pageTitle = context.title || "";
+
+    if (!candidateTitle) {
+      return false;
+    }
+
+    if (titleSignalMatches(candidateTitle, heading) || titleSignalMatches(candidateTitle, pageTitle)) {
+      return false;
+    }
+
+    if (titleSignalClearlyConflicts(candidateTitle, heading)) {
+      return true;
+    }
+
+    return (
+      getSignificantWords(heading).length < 2 &&
+      isLikelyPageTitleSignal(pageTitle) &&
+      titleSignalClearlyConflicts(candidateTitle, pageTitle)
+    );
+  }
+
   function scoreCandidate(candidate, pageContext) {
     var context = pageContext || {};
     var title = normalizeSearchText(candidate.title);
@@ -276,16 +389,32 @@
 
   function selectBestJobPosting(candidates, pageContext) {
     var scored;
+    var eligibleCandidates;
 
     if (!Array.isArray(candidates) || candidates.length === 0) {
       return null;
     }
 
-    scored = candidates.map(function (candidate, index) {
+    eligibleCandidates = candidates
+      .map(function (candidate, index) {
+        return {
+          candidate: candidate,
+          index: index
+        };
+      })
+      .filter(function (entry) {
+        return !isStaleJobPosting(entry.candidate, pageContext || {});
+      });
+
+    if (eligibleCandidates.length === 0) {
+      return null;
+    }
+
+    scored = eligibleCandidates.map(function (entry) {
       return {
-        candidate: candidate,
-        index: index,
-        score: scoreCandidate(candidate, pageContext)
+        candidate: entry.candidate,
+        index: entry.index,
+        score: scoreCandidate(entry.candidate, pageContext)
       };
     });
 
@@ -308,6 +437,8 @@
   function scanJsonLdTexts(texts, pageContext) {
     var candidates = [];
     var errors = [];
+    var context = pageContext || {};
+    var staleCandidates;
 
     (texts || []).forEach(function (text, sourceIndex) {
       var jsonLdValue;
@@ -323,17 +454,33 @@
       }
     });
 
+    staleCandidates = candidates.filter(function (candidate) {
+      return isStaleJobPosting(candidate, context);
+    });
+
     return {
       candidates: candidates,
-      selected: selectBestJobPosting(candidates, pageContext || {}),
+      selected: selectBestJobPosting(candidates, context),
+      staleCandidates: staleCandidates,
       errors: errors
     };
+  }
+
+  function shouldFetchHtmlFallback(scanResult, jsonLdTexts, readyState) {
+    var result = scanResult || {};
+
+    if (result.selected || (readyState && readyState !== "complete")) {
+      return false;
+    }
+
+    return true;
   }
 
   function getNoResultNotice(scanResult, jsonLdTexts, readyState) {
     var result = scanResult || {};
     var texts = jsonLdTexts || [];
     var errors = Array.isArray(result.errors) ? result.errors : [];
+    var staleCandidates = Array.isArray(result.staleCandidates) ? result.staleCandidates : [];
 
     if (result.selected) {
       return null;
@@ -343,6 +490,14 @@
       return {
         message: "Job page is still loading",
         helper: "Try again shortly if the job dates do not appear."
+      };
+    }
+
+    if (staleCandidates.length) {
+      return {
+        message: "Structured job data looks stale",
+        helper:
+          "The current DOM's JobPosting JSON-LD does not match the visible job."
       };
     }
 
@@ -363,6 +518,25 @@
     return {
       message: "No JobPosting JSON-LD found",
       helper: "This page has structured data, but not schema.org JobPosting data."
+    };
+  }
+
+  function getHtmlFallbackNoResultNotice() {
+    return {
+      message: "No trustworthy job data found",
+      helper:
+        "Neither the live page nor the current URL's HTML includes matching schema.org JobPosting JSON-LD."
+    };
+  }
+
+  function getHtmlFetchFailureNotice(error) {
+    var message = error && error.message ? error.message : String(error || "");
+
+    return {
+      message: "Current page HTML could not be fetched",
+      helper:
+        "JobDateLens could not re-read this URL's server HTML. Reload the page, then press the shortcut again." +
+        (message ? " (" + message + ")" : "")
     };
   }
 
@@ -549,7 +723,7 @@
   }
 
   function getPageContext(doc) {
-    var heading = doc.querySelector("h1");
+    var heading = doc.querySelector ? doc.querySelector("h1") : null;
     var bodyText = "";
 
     if (doc.body) {
@@ -563,10 +737,40 @@
     };
   }
 
+  function scanDocument(doc, pageContext) {
+    var jsonLdTexts = collectJsonLdScriptTexts(doc);
+    var result = scanJsonLdTexts(jsonLdTexts, pageContext || getPageContext(doc));
+
+    return {
+      jsonLdTexts: jsonLdTexts,
+      result: result,
+      readyState: doc.readyState || "complete"
+    };
+  }
+
+  function parseHtmlDocument(htmlText, parser) {
+    var htmlParser = parser;
+
+    if (!htmlParser && typeof DOMParser !== "undefined") {
+      htmlParser = new DOMParser();
+    }
+
+    if (!htmlParser || typeof htmlParser.parseFromString !== "function") {
+      throw new Error("DOMParser is not available.");
+    }
+
+    return htmlParser.parseFromString(String(htmlText || ""), "text/html");
+  }
+
+  function scanHtmlText(htmlText, pageContext, parser) {
+    return scanDocument(parseHtmlDocument(htmlText, parser), pageContext || {});
+  }
+
   function installBrowserApi() {
     var currentUrl = window.location.href;
     var collapsed = false;
     var noticeTimer = null;
+    var activeScanId = 0;
 
     function resetInteractionForNewUrl() {
       if (window.location.href !== currentUrl) {
@@ -584,10 +788,20 @@
       noticeTimer = null;
     }
 
-    function showNotice(message, helper) {
+    function showNotice(message, helper, options) {
       var notice;
       var messageNode;
       var helperNode;
+      var closeButton;
+      var persistent = Boolean(options && options.persistent);
+      var durationMs =
+        options && typeof options.durationMs === "number"
+          ? options.durationMs
+          : TRANSIENT_NOTICE_DURATION_MS;
+
+      if (persistent && !(options && typeof options.durationMs === "number")) {
+        durationMs = 0;
+      }
 
       if (!document.body) {
         return;
@@ -611,8 +825,21 @@
         notice.appendChild(helperNode);
       }
 
+      if (persistent) {
+        closeButton = document.createElement("button");
+        closeButton.type = "button";
+        closeButton.className = "jdl-notice-close";
+        closeButton.title = "Close JobDateLens notice";
+        closeButton.setAttribute("aria-label", closeButton.title);
+        closeButton.textContent = "x";
+        closeButton.addEventListener("click", removeNotice);
+        notice.appendChild(closeButton);
+      }
+
       document.body.appendChild(notice);
-      noticeTimer = window.setTimeout(removeNotice, 3600);
+      if (durationMs > 0) {
+        noticeTimer = window.setTimeout(removeNotice, durationMs);
+      }
     }
 
     function renderBadge(scanResult) {
@@ -704,38 +931,139 @@
       badge.replaceChildren(header, body);
     }
 
-    function scanOnce() {
-      var result;
-      var jsonLdTexts;
+    function summarizeScan(snapshot, source, reason) {
+      return {
+        found: Boolean(snapshot && snapshot.result && snapshot.result.selected),
+        candidates: snapshot && snapshot.result ? snapshot.result.candidates.length : 0,
+        errors: snapshot && snapshot.result ? snapshot.result.errors.length : 0,
+        stale:
+          snapshot && snapshot.result && Array.isArray(snapshot.result.staleCandidates)
+            ? snapshot.result.staleCandidates.length
+            : 0,
+        source: source || "",
+        reason: reason || ""
+      };
+    }
+
+    function fetchCurrentPageHtml(url) {
+      var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      var options = {
+        cache: "no-store",
+        credentials: "include"
+      };
+      var timeoutId;
+
+      if (controller) {
+        options.signal = controller.signal;
+      }
+
+      return new Promise(function (resolve, reject) {
+        timeoutId = window.setTimeout(function () {
+          if (controller) {
+            controller.abort();
+          }
+          reject(new Error("Timed out after " + HTML_FETCH_TIMEOUT_MS + "ms."));
+        }, HTML_FETCH_TIMEOUT_MS);
+
+        window
+          .fetch(url, options)
+          .then(function (response) {
+            if (!response.ok) {
+              throw new Error("HTTP " + response.status);
+            }
+            return response.text();
+          })
+          .then(
+            function (htmlText) {
+              window.clearTimeout(timeoutId);
+              resolve(htmlText);
+            },
+            function (error) {
+              window.clearTimeout(timeoutId);
+              reject(error);
+            }
+          );
+      });
+    }
+
+    async function scanOnce() {
+      var scanId = activeScanId + 1;
+      var pageContext;
+      var domSnapshot;
+      var htmlSnapshot;
       var notice;
+      var url;
+      var htmlText;
+
+      activeScanId = scanId;
 
       if (!document.body) {
         return {
           found: false,
           candidates: 0,
           errors: 0,
+          stale: 0,
           reason: "document-not-ready"
         };
       }
 
       resetInteractionForNewUrl();
+      removeBadge();
+      showNotice("Scanning current page...", "Reading schema.org JobPosting JSON-LD.", {
+        durationMs: 0
+      });
 
-      jsonLdTexts = collectJsonLdScriptTexts(document);
-      result = scanJsonLdTexts(jsonLdTexts, getPageContext(document));
+      pageContext = getPageContext(document);
+      domSnapshot = scanDocument(document, pageContext);
 
-      if (result.selected) {
-        renderBadge(result);
-      } else {
-        removeBadge();
-        notice = getNoResultNotice(result, jsonLdTexts, document.readyState);
-        showNotice(notice.message, notice.helper);
+      if (domSnapshot.result.selected) {
+        renderBadge(domSnapshot.result);
+        return summarizeScan(domSnapshot, "dom");
       }
 
-      return {
-        found: Boolean(result.selected),
-        candidates: result.candidates.length,
-        errors: result.errors.length
-      };
+      if (
+        !shouldFetchHtmlFallback(
+          domSnapshot.result,
+          domSnapshot.jsonLdTexts,
+          domSnapshot.readyState
+        )
+      ) {
+        notice = getNoResultNotice(
+          domSnapshot.result,
+          domSnapshot.jsonLdTexts,
+          domSnapshot.readyState
+        );
+        showNotice(notice.message, notice.helper);
+        return summarizeScan(domSnapshot, "dom");
+      }
+
+      url = window.location.href;
+      try {
+        htmlText = await fetchCurrentPageHtml(url);
+        if (scanId !== activeScanId || window.location.href !== url) {
+          return summarizeScan(null, "html", "scan-superseded");
+        }
+
+        htmlSnapshot = scanHtmlText(htmlText, pageContext);
+        if (htmlSnapshot.result.selected) {
+          renderBadge(htmlSnapshot.result);
+          return summarizeScan(htmlSnapshot, "html");
+        }
+
+        removeBadge();
+        notice = getHtmlFallbackNoResultNotice();
+        showNotice(notice.message, notice.helper, { persistent: true });
+        return summarizeScan(htmlSnapshot, "html", "html-no-match");
+      } catch (error) {
+        if (scanId !== activeScanId) {
+          return summarizeScan(null, "html", "scan-superseded");
+        }
+
+        removeBadge();
+        notice = getHtmlFetchFailureNotice(error);
+        showNotice(notice.message, notice.helper, { persistent: true });
+        return summarizeScan(domSnapshot, "dom", "html-fetch-failed");
+      }
     }
 
     window.JobDateLens = Object.assign({}, api, {
@@ -748,11 +1076,18 @@
     extractJobPostingsFromJsonLd: extractJobPostingsFromJsonLd,
     scanJsonLdTexts: scanJsonLdTexts,
     getNoResultNotice: getNoResultNotice,
+    getHtmlFallbackNoResultNotice: getHtmlFallbackNoResultNotice,
+    shouldFetchHtmlFallback: shouldFetchHtmlFallback,
     selectBestJobPosting: selectBestJobPosting,
     scoreCandidate: scoreCandidate,
+    isStaleJobPosting: isStaleJobPosting,
     parseSchemaDate: parseSchemaDate,
+    scanDocument: scanDocument,
+    scanHtmlText: scanHtmlText,
     formatJobPosting: formatJobPosting,
-    isJsonLdType: isJsonLdType
+    isJsonLdType: isJsonLdType,
+    HTML_FETCH_TIMEOUT_MS: HTML_FETCH_TIMEOUT_MS,
+    TRANSIENT_NOTICE_DURATION_MS: TRANSIENT_NOTICE_DURATION_MS
   };
 
   if (typeof module !== "undefined" && module.exports) {

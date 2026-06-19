@@ -37,6 +37,36 @@ function jobPosting(overrides = {}) {
   );
 }
 
+function documentWithJsonLdTexts(texts, options = {}) {
+  return {
+    readyState: options.readyState || "complete",
+    title: options.title || "",
+    body: {
+      innerText: options.visibleText || ""
+    },
+    querySelector(selector) {
+      if (selector === "h1" && options.heading) {
+        return { textContent: options.heading };
+      }
+      return null;
+    },
+    scripts: texts.map((text) => ({
+      type: "application/ld+json",
+      textContent: text
+    }))
+  };
+}
+
+function parserReturningDocument(expectedHtml, doc) {
+  return {
+    parseFromString(htmlText, type) {
+      assert.equal(htmlText, expectedHtml);
+      assert.equal(type, "text/html");
+      return doc;
+    }
+  };
+}
+
 test("finds a single JobPosting JSON-LD block", () => {
   const result = scan(json(jobPosting()));
   const model = jobDateLens.formatJobPosting(result.selected, new Date(2026, 5, 18, 12));
@@ -48,6 +78,11 @@ test("finds a single JobPosting JSON-LD block", () => {
   assert.equal(result.selected.datePostedRaw, "2026-06-01");
   assert.equal(result.selected.validThroughRaw, "2026-07-31");
   assert.equal(model.status.kind, "open");
+});
+
+test("exports tuned timing constants", () => {
+  assert.equal(jobDateLens.HTML_FETCH_TIMEOUT_MS, 1500);
+  assert.equal(jobDateLens.TRANSIENT_NOTICE_DURATION_MS, 3000);
 });
 
 test("does not select anything without JSON-LD", () => {
@@ -159,6 +194,67 @@ test("selects the best matching JobPosting when multiple candidates exist", () =
   assert.equal(result.selected.company, "Acme Analytics");
 });
 
+test("does not select stale JobPosting JSON-LD from a previous SPA route", () => {
+  const jsonLdText = json(
+    jobPosting({
+      title: "Sales Lead, Hong Kong",
+      datePosted: "2026-06-18",
+      validThrough: undefined,
+      hiringOrganization: {
+        "@type": "Organization",
+        name: "Codex"
+      }
+    })
+  );
+  const result = scan(jsonLdText, {
+    title: "Software Engineer, Singapore @ Codex",
+    heading: "Software Engineer, Singapore",
+    visibleText: "Software Engineer, Singapore Codex Engineering"
+  });
+  const notice = jobDateLens.getNoResultNotice(result, [jsonLdText], "complete");
+
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.staleCandidates.length, 1);
+  assert.equal(result.selected, null);
+  assert.deepEqual(notice, {
+    message: "Structured job data looks stale",
+    helper: "The current DOM's JobPosting JSON-LD does not match the visible job."
+  });
+});
+
+test("accepts direct-loaded Ashby-style JobPosting JSON-LD without validThrough", () => {
+  const result = scan(
+    json(
+      jobPosting({
+        title: "Software Engineer, Singapore",
+        datePosted: "2026-06-17",
+        validThrough: undefined,
+        hiringOrganization: {
+          "@type": "Organization",
+          name: "Codex",
+          sameAs: "https://codex.xyz/"
+        },
+        jobLocationType: "TELECOMMUTE"
+      })
+    ),
+    {
+      title: "Software Engineer, Singapore @ Codex",
+      heading: "Software Engineer, Singapore",
+      visibleText: "Software Engineer, Singapore Codex Engineering"
+    }
+  );
+  const model = jobDateLens.formatJobPosting(result.selected, new Date(2026, 5, 19, 12));
+
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.staleCandidates.length, 0);
+  assert.equal(result.selected.title, "Software Engineer, Singapore");
+  assert.equal(result.selected.company, "Codex");
+  assert.equal(result.selected.datePostedRaw, "2026-06-17");
+  assert.equal(model.status.kind, "missing");
+  assert.equal(model.status.label, "No expiry");
+});
+
 test("records malformed JSON-LD errors without selecting a posting", () => {
   const result = scan('{"@context":"https://schema.org","@type":"JobPosting","title":"Broken Role",}');
 
@@ -185,6 +281,85 @@ test("uses a no structured data notice when a complete page has no JSON-LD", () 
     message: "No structured job data found",
     helper: "JobDateLens only reads schema.org JobPosting JSON-LD."
   });
+});
+
+test("decides when current URL HTML fallback should run", () => {
+  const validJsonLdText = json(jobPosting());
+  const validResult = scan(validJsonLdText);
+  const missingResult = scan([]);
+  const staleJsonLdText = json(
+    jobPosting({
+      title: "Sales Lead, Hong Kong",
+      datePosted: "2026-06-18"
+    })
+  );
+  const staleResult = scan(staleJsonLdText, {
+    title: "Software Engineer, Singapore @ Codex",
+    heading: "Software Engineer, Singapore",
+    visibleText: "Software Engineer, Singapore Codex Engineering"
+  });
+  const malformedJsonLdText =
+    '{"@context":"https://schema.org","@type":"JobPosting","title":"Broken Role",}';
+  const malformedResult = scan(malformedJsonLdText);
+
+  assert.equal(
+    jobDateLens.shouldFetchHtmlFallback(validResult, [validJsonLdText], "complete"),
+    false
+  );
+  assert.equal(jobDateLens.shouldFetchHtmlFallback(missingResult, [], "complete"), true);
+  assert.equal(
+    jobDateLens.shouldFetchHtmlFallback(staleResult, [staleJsonLdText], "complete"),
+    true
+  );
+  assert.equal(
+    jobDateLens.shouldFetchHtmlFallback(malformedResult, [malformedJsonLdText], "complete"),
+    true
+  );
+  assert.equal(jobDateLens.shouldFetchHtmlFallback(missingResult, [], "interactive"), false);
+});
+
+test("scans fetched HTML text for matching JobPosting JSON-LD", () => {
+  const html = '<!doctype html><script type="application/ld+json"></script>';
+  const jsonLdText = json(
+    jobPosting({
+      title: "Software Engineer, Singapore",
+      datePosted: "2026-06-17",
+      validThrough: undefined,
+      hiringOrganization: {
+        "@type": "Organization",
+        name: "Codex"
+      }
+    })
+  );
+  const context = {
+    title: "Software Engineer, Singapore @ Codex",
+    heading: "Software Engineer, Singapore",
+    visibleText: "Software Engineer, Singapore Codex Engineering"
+  };
+  const parser = parserReturningDocument(html, documentWithJsonLdTexts([jsonLdText]));
+  const snapshot = jobDateLens.scanHtmlText(html, context, parser);
+
+  assert.equal(snapshot.readyState, "complete");
+  assert.equal(snapshot.jsonLdTexts.length, 1);
+  assert.equal(snapshot.result.selected.title, "Software Engineer, Singapore");
+  assert.equal(snapshot.result.selected.company, "Codex");
+});
+
+test("malformed DOM JSON-LD does not mask a valid fetched HTML result", () => {
+  const malformedJsonLdText =
+    '{"@context":"https://schema.org","@type":"JobPosting","title":"Broken Role",}';
+  const malformedResult = scan(malformedJsonLdText);
+  const html = '<!doctype html><script type="application/ld+json"></script>';
+  const fetchedJsonLdText = json(jobPosting());
+  const parser = parserReturningDocument(html, documentWithJsonLdTexts([fetchedJsonLdText]));
+  const snapshot = jobDateLens.scanHtmlText(html, defaultContext, parser);
+
+  assert.equal(
+    jobDateLens.shouldFetchHtmlFallback(malformedResult, [malformedJsonLdText], "complete"),
+    true
+  );
+  assert.equal(malformedResult.selected, null);
+  assert.equal(snapshot.result.selected.title, "Senior Product Manager");
 });
 
 test("uses a no JobPosting notice when JSON-LD has no job posting", () => {
@@ -248,7 +423,12 @@ test("surfaces invalid date fields", () => {
         datePosted: "not-a-date",
         validThrough: "2026-99-99"
       })
-    )
+    ),
+    {
+      title: "Finance Analyst at Acme Analytics",
+      heading: "Finance Analyst",
+      visibleText: "Finance Analyst Acme Analytics is hiring."
+    }
   );
   const model = jobDateLens.formatJobPosting(result.selected, new Date(2026, 5, 18, 12));
 
@@ -266,7 +446,12 @@ test("marks expired postings based on validThrough", () => {
         datePosted: "2026-01-10",
         validThrough: "2026-02-01"
       })
-    )
+    ),
+    {
+      title: "Recruiter at Acme Analytics",
+      heading: "Recruiter",
+      visibleText: "Recruiter Acme Analytics is hiring."
+    }
   );
   const model = jobDateLens.formatJobPosting(result.selected, new Date(2026, 5, 18, 12));
 

@@ -58,3 +58,12 @@ test("notice text containers define line-height independent of page div resets",
   assert.match(getCssBlock("#jobdatelens-notice > div"), /line-height:\s*1\.35;/);
   assert.match(getCssBlock("#jobdatelens-notice .jdl-notice-helper"), /line-height:\s*1\.35;/);
 });
+
+test("notice close button uses stable compact dimensions", () => {
+  const block = getCssBlock("#jobdatelens-notice .jdl-notice-close");
+
+  assert.match(block, /position:\s*absolute;/);
+  assert.match(block, /width:\s*22px;/);
+  assert.match(block, /height:\s*22px;/);
+  assert.match(block, /line-height:\s*1;/);
+});
