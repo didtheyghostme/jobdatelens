@@ -222,6 +222,53 @@ test("does not select stale JobPosting JSON-LD from a previous SPA route", () =>
   });
 });
 
+test("does not let related role body text mask stale JobPosting JSON-LD", () => {
+  const jsonLdText = json(
+    jobPosting({
+      title: "Sales Lead, Hong Kong",
+      datePosted: "2026-06-18",
+      validThrough: undefined,
+      hiringOrganization: {
+        "@type": "Organization",
+        name: "Codex"
+      }
+    })
+  );
+  const result = scan(jsonLdText, {
+    title: "Software Engineer, Singapore @ Codex",
+    heading: "Software Engineer, Singapore",
+    visibleText:
+      "Software Engineer, Singapore Codex Engineering Related roles: Sales Lead, Hong Kong"
+  });
+
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.staleCandidates.length, 1);
+  assert.equal(result.selected, null);
+});
+
+test("rejects stale one-word JobPosting title when the current heading conflicts", () => {
+  const jsonLdText = json(
+    jobPosting({
+      title: "Recruiter",
+      datePosted: "2026-06-18",
+      validThrough: undefined,
+      hiringOrganization: {
+        "@type": "Organization",
+        name: "Acme Analytics"
+      }
+    })
+  );
+  const result = scan(jsonLdText, {
+    title: "Accountant at Acme Analytics",
+    heading: "Accountant",
+    visibleText: "Accountant Acme Analytics finance role"
+  });
+
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.staleCandidates.length, 1);
+  assert.equal(result.selected, null);
+});
+
 test("accepts direct-loaded Ashby-style JobPosting JSON-LD without validThrough", () => {
   const result = scan(
     json(
@@ -253,6 +300,130 @@ test("accepts direct-loaded Ashby-style JobPosting JSON-LD without validThrough"
   assert.equal(result.selected.datePostedRaw, "2026-06-17");
   assert.equal(model.status.kind, "missing");
   assert.equal(model.status.label, "No expiry");
+});
+
+test("accepts current JobPosting JSON-LD when heading and page title are generic", () => {
+  const result = scan(
+    json(
+      jobPosting({
+        title: "Software Engineer, Singapore",
+        datePosted: "2026-06-17",
+        validThrough: undefined,
+        hiringOrganization: {
+          "@type": "Organization",
+          name: "Codex"
+        }
+      })
+    ),
+    {
+      title: "Careers | Codex",
+      heading: "Job details",
+      visibleText:
+        "Software Engineer, Singapore Codex Engineering This is a full-stack role in Singapore."
+    }
+  );
+
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.staleCandidates.length, 0);
+  assert.equal(result.selected.title, "Software Engineer, Singapore");
+});
+
+test("accepts current JobPosting JSON-LD when page title starts with a brand", () => {
+  const result = scan(
+    json(
+      jobPosting({
+        title: "Software Engineer",
+        datePosted: "2026-06-17",
+        validThrough: undefined,
+        hiringOrganization: {
+          "@type": "Organization",
+          name: "Acme Analytics"
+        }
+      })
+    ),
+    {
+      title: "Acme Analytics | Careers",
+      heading: "Job details",
+      visibleText: "Software Engineer Acme Analytics Engineering role"
+    }
+  );
+
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.staleCandidates.length, 0);
+  assert.equal(result.selected.title, "Software Engineer");
+});
+
+test("accepts current JobPosting JSON-LD when heading is open positions", () => {
+  const result = scan(
+    json(
+      jobPosting({
+        title: "Software Engineer",
+        datePosted: "2026-06-17",
+        validThrough: undefined,
+        hiringOrganization: {
+          "@type": "Organization",
+          name: "Codex"
+        }
+      })
+    ),
+    {
+      title: "Careers | Codex",
+      heading: "Open Positions",
+      visibleText: "Software Engineer Codex Engineering role"
+    }
+  );
+
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.staleCandidates.length, 0);
+  assert.equal(result.selected.title, "Software Engineer");
+});
+
+test("accepts current JobPosting JSON-LD when heading is join our team", () => {
+  const result = scan(
+    json(
+      jobPosting({
+        title: "Software Engineer",
+        datePosted: "2026-06-17",
+        validThrough: undefined,
+        hiringOrganization: {
+          "@type": "Organization",
+          name: "Codex"
+        }
+      })
+    ),
+    {
+      title: "Careers | Codex",
+      heading: "Join Our Team",
+      visibleText: "Software Engineer Codex Engineering role"
+    }
+  );
+
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.staleCandidates.length, 0);
+  assert.equal(result.selected.title, "Software Engineer");
+});
+
+test("does not reject JobPosting JSON-LD from page title alone when heading is generic", () => {
+  const jsonLdText = json(
+    jobPosting({
+      title: "Sales Lead, Hong Kong",
+      datePosted: "2026-06-18",
+      validThrough: undefined,
+      hiringOrganization: {
+        "@type": "Organization",
+        name: "Codex"
+      }
+    })
+  );
+  const result = scan(jsonLdText, {
+    title: "Software Engineer, Singapore @ Codex",
+    heading: "Job details",
+    visibleText: "Software Engineer, Singapore Codex Engineering"
+  });
+
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.staleCandidates.length, 0);
+  assert.equal(result.selected.title, "Sales Lead, Hong Kong");
 });
 
 test("records malformed JSON-LD errors without selecting a posting", () => {

@@ -298,7 +298,7 @@
       return false;
     }
 
-    if (candidateWords.length < 2 || signalWords.length < 2) {
+    if (candidateWords.length < 1 || signalWords.length < 1) {
       return false;
     }
 
@@ -309,8 +309,24 @@
     );
   }
 
-  function isLikelyPageTitleSignal(value) {
-    return /(@|\||\s+-\s+|\s+\u2013\s+|\s+\u2014\s+|\sat\s)/i.test(String(value || ""));
+  function isGenericHeadingSignal(heading) {
+    var key = getSignificantWords(heading).join(" ");
+    var genericHeadings = {
+      "job details": true,
+      "job detail": true,
+      "job description": true,
+      "open role": true,
+      "open roles": true,
+      "open position": true,
+      "open positions": true,
+      "current opening": true,
+      "current openings": true,
+      careers: true,
+      "apply now": true,
+      "join our team": true
+    };
+
+    return Boolean(genericHeadings[key]);
   }
 
   function isStaleJobPosting(candidate, pageContext) {
@@ -318,6 +334,7 @@
     var candidateTitle = candidate && candidate.title;
     var heading = context.heading || "";
     var pageTitle = context.title || "";
+    var headingIsGeneric = isGenericHeadingSignal(heading);
 
     if (!candidateTitle) {
       return false;
@@ -327,15 +344,11 @@
       return false;
     }
 
-    if (titleSignalClearlyConflicts(candidateTitle, heading)) {
+    if (!headingIsGeneric && titleSignalClearlyConflicts(candidateTitle, heading)) {
       return true;
     }
 
-    return (
-      getSignificantWords(heading).length < 2 &&
-      isLikelyPageTitleSignal(pageTitle) &&
-      titleSignalClearlyConflicts(candidateTitle, pageTitle)
-    );
+    return false;
   }
 
   function scoreCandidate(candidate, pageContext) {
@@ -1040,7 +1053,11 @@
       url = window.location.href;
       try {
         htmlText = await fetchCurrentPageHtml(url);
-        if (scanId !== activeScanId || window.location.href !== url) {
+        if (scanId !== activeScanId) {
+          return summarizeScan(null, "html", "scan-superseded");
+        }
+        if (window.location.href !== url) {
+          removeNotice();
           return summarizeScan(null, "html", "scan-superseded");
         }
 
@@ -1056,6 +1073,10 @@
         return summarizeScan(htmlSnapshot, "html", "html-no-match");
       } catch (error) {
         if (scanId !== activeScanId) {
+          return summarizeScan(null, "html", "scan-superseded");
+        }
+        if (window.location.href !== url) {
+          removeNotice();
           return summarizeScan(null, "html", "scan-superseded");
         }
 
