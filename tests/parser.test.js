@@ -489,6 +489,22 @@ test("decides when current URL HTML fallback should run", () => {
   assert.equal(jobDateLens.shouldFetchHtmlFallback(missingResult, [], "interactive"), false);
 });
 
+test("canonicalizes allowlisted Lever apply URLs for HTML fallback", () => {
+  const applyUrl =
+    "https://jobs.lever.co/shopback-2/4e119b8f-3c8d-47e6-9dde-f232930e752c/apply";
+  const canonicalUrl =
+    "https://jobs.lever.co/shopback-2/4e119b8f-3c8d-47e6-9dde-f232930e752c";
+
+  assert.equal(jobDateLens.getHtmlFallbackUrl(applyUrl), canonicalUrl);
+  assert.equal(jobDateLens.getHtmlFallbackUrl(`${applyUrl}?utm_source=test#form`), canonicalUrl);
+  assert.equal(jobDateLens.getHtmlFallbackUrl(canonicalUrl), canonicalUrl);
+  assert.equal(
+    jobDateLens.getHtmlFallbackUrl("https://example.com/shopback-2/posting-id/apply"),
+    "https://example.com/shopback-2/posting-id/apply"
+  );
+  assert.equal(jobDateLens.getHtmlFallbackUrl("not a url"), "not a url");
+});
+
 test("scans fetched HTML text for matching JobPosting JSON-LD", () => {
   const html = '<!doctype html><script type="application/ld+json"></script>';
   const jsonLdText = json(

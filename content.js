@@ -8,6 +8,17 @@
   var MS_PER_DAY = 24 * 60 * 60 * 1000;
   var TRANSIENT_NOTICE_DURATION_MS = 3000;
   var HTML_FETCH_TIMEOUT_MS = 1500;
+  var HTML_FALLBACK_CANONICALIZERS = {
+    "jobs.lever.co": function (url) {
+      var pathSegments = url.pathname.split("/").filter(Boolean);
+
+      if (pathSegments.length === 3 && pathSegments[2] === "apply") {
+        return url.origin + "/" + pathSegments[0] + "/" + pathSegments[1];
+      }
+
+      return url.href;
+    }
+  };
 
   if (typeof window !== "undefined" && window.JobDateLens && window.JobDateLens.scanOnce) {
     return;
@@ -779,6 +790,25 @@
     return scanDocument(parseHtmlDocument(htmlText, parser), pageContext || {});
   }
 
+  function getHtmlFallbackUrl(currentUrl) {
+    var original = String(currentUrl || "");
+    var parsed;
+    var hostname;
+
+    try {
+      parsed = new URL(original);
+    } catch (error) {
+      return original;
+    }
+
+    hostname = parsed.hostname.toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(HTML_FALLBACK_CANONICALIZERS, hostname)) {
+      return HTML_FALLBACK_CANONICALIZERS[hostname](parsed);
+    }
+
+    return original;
+  }
+
   function installBrowserApi() {
     var currentUrl = window.location.href;
     var collapsed = false;
@@ -1005,7 +1035,8 @@
       var domSnapshot;
       var htmlSnapshot;
       var notice;
-      var url;
+      var pageUrl;
+      var fallbackUrl;
       var htmlText;
 
       activeScanId = scanId;
@@ -1050,13 +1081,14 @@
         return summarizeScan(domSnapshot, "dom");
       }
 
-      url = window.location.href;
+      pageUrl = window.location.href;
+      fallbackUrl = getHtmlFallbackUrl(pageUrl);
       try {
-        htmlText = await fetchCurrentPageHtml(url);
+        htmlText = await fetchCurrentPageHtml(fallbackUrl);
         if (scanId !== activeScanId) {
           return summarizeScan(null, "html", "scan-superseded");
         }
-        if (window.location.href !== url) {
+        if (window.location.href !== pageUrl) {
           removeNotice();
           return summarizeScan(null, "html", "scan-superseded");
         }
@@ -1075,7 +1107,7 @@
         if (scanId !== activeScanId) {
           return summarizeScan(null, "html", "scan-superseded");
         }
-        if (window.location.href !== url) {
+        if (window.location.href !== pageUrl) {
           removeNotice();
           return summarizeScan(null, "html", "scan-superseded");
         }
@@ -1105,6 +1137,7 @@
     parseSchemaDate: parseSchemaDate,
     scanDocument: scanDocument,
     scanHtmlText: scanHtmlText,
+    getHtmlFallbackUrl: getHtmlFallbackUrl,
     formatJobPosting: formatJobPosting,
     isJsonLdType: isJsonLdType,
     HTML_FETCH_TIMEOUT_MS: HTML_FETCH_TIMEOUT_MS,

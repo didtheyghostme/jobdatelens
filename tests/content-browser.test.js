@@ -95,6 +95,30 @@ function createFakeDocument() {
   return document;
 }
 
+function createJsonLdDocument(jsonLdText, options = {}) {
+  const document = createFakeDocument();
+
+  document.title = options.title || "";
+  document.body.innerText = options.visibleText || "";
+  document.body.textContent = document.body.innerText;
+  document.scripts = jsonLdText
+    ? [
+        {
+          type: "application/ld+json",
+          textContent: jsonLdText
+        }
+      ]
+    : [];
+  document.querySelector = (selector) => {
+    if (selector === "h1" && options.heading) {
+      return { textContent: options.heading };
+    }
+    return null;
+  };
+
+  return document;
+}
+
 test("scanOnce treats failed HTML fallback after navigation as superseded", async () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   const document = createFakeDocument();
@@ -125,4 +149,117 @@ test("scanOnce treats failed HTML fallback after navigation as superseded", asyn
 
   assert.equal(result.reason, "scan-superseded");
   assert.equal(document.getElementById("jobdatelens-notice"), null);
+});
+
+test("scanOnce fetches canonical Lever job HTML from apply pages", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const applyUrl =
+    "https://jobs.lever.co/shopback-2/4e119b8f-3c8d-47e6-9dde-f232930e752c/apply";
+  const canonicalUrl =
+    "https://jobs.lever.co/shopback-2/4e119b8f-3c8d-47e6-9dde-f232930e752c";
+  const html = "<!doctype html><title>Lever Job</title>";
+  const jsonLdText = JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "JobPosting",
+    title: "Software Engineer Intern - Backend (May - Dec 2026)",
+    datePosted: "2026-01-28",
+    hiringOrganization: {
+      "@type": "Organization",
+      name: "ShopBack"
+    }
+  });
+  const document = createFakeDocument();
+  const parsedDocument = createJsonLdDocument(jsonLdText);
+  let fetchedUrl = "";
+
+  document.title = "ShopBack - Software Engineer Intern - Backend (May - Dec 2026)";
+  document.body.innerText =
+    "Submit your application Software Engineer Intern - Backend (May - Dec 2026) ShopBack";
+  document.body.textContent = document.body.innerText;
+
+  const fakeWindow = {
+    location: {
+      href: applyUrl
+    },
+    setTimeout,
+    clearTimeout,
+    fetch(url) {
+      fetchedUrl = url;
+      return Promise.resolve({
+        ok: true,
+        text() {
+          return Promise.resolve(html);
+        }
+      });
+    }
+  };
+  const context = vm.createContext({
+    console,
+    document,
+    DOMParser: class {
+      parseFromString(htmlText, type) {
+        assert.equal(htmlText, html);
+        assert.equal(type, "text/html");
+        return parsedDocument;
+      }
+    },
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+
+  const result = await fakeWindow.JobDateLens.scanOnce();
+
+  assert.equal(fetchedUrl, canonicalUrl);
+  assert.equal(result.found, true);
+  assert.equal(result.source, "html");
+  assert.equal(document.getElementById("jobdatelens-badge").tagName, "ASIDE");
+});
+
+test("scanOnce keeps non-Lever apply pages on current URL HTML fallback", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const currentUrl = "https://example.com/shopback-2/posting-id/apply";
+  const html = "<!doctype html><title>No JSON-LD</title>";
+  const document = createFakeDocument();
+  const parsedDocument = createJsonLdDocument("");
+  let fetchedUrl = "";
+
+  const fakeWindow = {
+    location: {
+      href: currentUrl
+    },
+    setTimeout,
+    clearTimeout,
+    fetch(url) {
+      fetchedUrl = url;
+      return Promise.resolve({
+        ok: true,
+        text() {
+          return Promise.resolve(html);
+        }
+      });
+    }
+  };
+  const context = vm.createContext({
+    console,
+    document,
+    DOMParser: class {
+      parseFromString(htmlText, type) {
+        assert.equal(htmlText, html);
+        assert.equal(type, "text/html");
+        return parsedDocument;
+      }
+    },
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+
+  const result = await fakeWindow.JobDateLens.scanOnce();
+
+  assert.equal(fetchedUrl, currentUrl);
+  assert.equal(result.found, false);
+  assert.equal(result.reason, "html-no-match");
 });
