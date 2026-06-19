@@ -18,6 +18,9 @@ JobDateLens does not scan every page automatically. It checks the current page o
 - Or click the JobDateLens toolbar icon.
 
 Chrome shortcuts can be changed at `chrome://extensions/shortcuts`.
+If Chrome leaves the JobDateLens shortcut unassigned when the extension is installed, JobDateLens shows a small `!` badge on its toolbar icon and updates the icon title with a shortcut setup hint.
+Chrome leaves JobDateLens unassigned rather than letting it overwrite another extension's existing shortcut.
+This detects only JobDateLens's own unassigned Chrome extension command. Chrome extensions cannot inspect every system, browser, or user-defined shortcut, and some Chrome or operating system shortcuts may take priority.
 
 The extension scans the active page locally for `<script type="application/ld+json">` blocks. It does not call a backend, send page data anywhere, or request storage permissions.
 
