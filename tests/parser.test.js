@@ -646,6 +646,174 @@ test("rejects unsafe or unsupported linked Lever fallback URLs", () => {
   });
 });
 
+test("detects direct Greenhouse API lookup requests", () => {
+  assert.deepEqual(
+    jobDateLens.getGreenhouseLookupRequest(
+      null,
+      "https://job-boards.greenhouse.io/anthropic/jobs/5238606008"
+    ),
+    {
+      boardToken: "anthropic",
+      jobId: "5238606008",
+      apiUrl: "https://boards-api.greenhouse.io/v1/boards/anthropic/jobs/5238606008"
+    }
+  );
+  assert.deepEqual(
+    jobDateLens.getGreenhouseLookupRequest(
+      null,
+      "https://boards.greenhouse.io/pallet/jobs/5169663007"
+    ),
+    {
+      boardToken: "pallet",
+      jobId: "5169663007",
+      apiUrl: "https://boards-api.greenhouse.io/v1/boards/pallet/jobs/5169663007"
+    }
+  );
+});
+
+test("detects custom Greenhouse API lookup requests from embed hints and host mappings", () => {
+  const rippleDocument = {
+    scripts: [],
+    querySelectorAll(selector) {
+      assert.equal(selector, "script[src], link[href], a[href]");
+      return [
+        {
+          href: "https://boards.greenhouse.io/embed/job_board/js?for=ripple"
+        }
+      ];
+    }
+  };
+
+  assert.deepEqual(
+    jobDateLens.getGreenhouseLookupRequest(
+      rippleDocument,
+      "https://ripple.com/careers/all-jobs/job/7724653/?gh_jid=7724653"
+    ),
+    {
+      boardToken: "ripple",
+      jobId: "7724653",
+      apiUrl: "https://boards-api.greenhouse.io/v1/boards/ripple/jobs/7724653"
+    }
+  );
+  assert.deepEqual(
+    jobDateLens.getGreenhouseLookupRequest(
+      { querySelectorAll: () => [] },
+      "https://www.mongodb.com/careers/jobs/7851388"
+    ),
+    {
+      boardToken: "mongodb",
+      jobId: "7851388",
+      apiUrl: "https://boards-api.greenhouse.io/v1/boards/mongodb/jobs/7851388"
+    }
+  );
+});
+
+test("rejects unsafe Greenhouse lookup URLs", () => {
+  assert.equal(
+    jobDateLens.getGreenhouseLookupRequest(
+      null,
+      "http://job-boards.greenhouse.io/anthropic/jobs/5238606008"
+    ),
+    null
+  );
+  assert.equal(
+    jobDateLens.getGreenhouseLookupRequest(
+      null,
+      "https://job-boards.greenhouse.io/anthropic/jobs/not-a-number"
+    ),
+    null
+  );
+  assert.equal(
+    jobDateLens.getGreenhouseLookupRequest(
+      { querySelectorAll: () => [] },
+      "https://example.com/careers/jobs/5238606008"
+    ),
+    null
+  );
+});
+
+test("formats Greenhouse public dates as visible date rows", () => {
+  const candidate = jobDateLens.createGreenhouseCandidate(
+    {
+      title: "Software Engineer, RL Data",
+      company_name: "Anthropic",
+      first_published: "2026-06-02T10:06:04-04:00",
+      updated_at: "2026-06-09T07:25:14-04:00",
+      application_deadline: null
+    },
+    {
+      boardToken: "anthropic",
+      jobId: "5238606008"
+    }
+  );
+  const model = jobDateLens.formatJobPosting(candidate, new Date("2026-06-20T12:00:00-04:00"));
+
+  assert.equal(model.title, "Software Engineer, RL Data");
+  assert.equal(model.company, "Anthropic");
+  assert.deepEqual(
+    model.dateRows.map((row) => [row.label, row.state]),
+    [
+      ["Posted", "valid"],
+      ["Deadline", "missing"],
+      ["Last updated", "valid"]
+    ]
+  );
+  assert.equal(model.validThrough.label, "Not provided");
+  assert.match(model.dateRows[1].helper, /Greenhouse API: application_deadline/);
+  assert.equal(model.status.kind, "missing");
+});
+
+test("uses Greenhouse application_deadline as the deadline when present", () => {
+  const candidate = jobDateLens.createGreenhouseCandidate(
+    {
+      title: "Program Manager",
+      company_name: "Example",
+      first_published: "2026-06-01T09:00:00-04:00",
+      updated_at: "2026-06-05T09:00:00-04:00",
+      application_deadline: "2026-07-31T23:59:59-04:00"
+    },
+    {
+      boardToken: "example",
+      jobId: "123"
+    }
+  );
+  const model = jobDateLens.formatJobPosting(candidate, new Date("2026-06-20T12:00:00-04:00"));
+  const deadline = model.dateRows.find((row) => row.key === "deadline");
+
+  assert.equal(deadline.state, "valid");
+  assert.match(deadline.helper, /expires in/);
+  assert.equal(model.status.kind, "open");
+});
+
+test("surfaces same-meaning date source conflicts", () => {
+  const sources = jobDateLens.normalizeDateSources([
+    jobDateLens.createDateSource({
+      key: "posted",
+      label: "Posted",
+      raw: "2026-06-01T09:00:00-04:00",
+      source: "Greenhouse API",
+      field: "first_published",
+      usage: "datePosted",
+      priority: 100
+    }),
+    jobDateLens.createDateSource({
+      key: "posted",
+      label: "Posted",
+      raw: "2026-06-02T09:00:00-04:00",
+      source: "Greenhouse page",
+      field: "published_at",
+      usage: "datePosted",
+      priority: 90
+    })
+  ]);
+
+  assert.equal(sources.length, 1);
+  assert.equal(sources[0].raw, "2026-06-01T09:00:00-04:00");
+  assert.deepEqual(sources[0].conflicts, [
+    "Greenhouse page: published_at=2026-06-02T09:00:00-04:00"
+  ]);
+});
+
 test("scans fetched HTML text for matching JobPosting JSON-LD", () => {
   const html = '<!doctype html><script type="application/ld+json"></script>';
   const jsonLdText = json(

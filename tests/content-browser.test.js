@@ -276,6 +276,146 @@ test("scanOnce keeps non-Lever apply pages on current URL HTML fallback", async 
   assert.equal(result.reason, "html-no-match");
 });
 
+test("scanOnce fetches direct Greenhouse public API dates", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const currentUrl = "https://job-boards.greenhouse.io/pallet/jobs/5169663007";
+  const document = createFakeDocument();
+  let fetchedUrl = "";
+  let fetchOptions = null;
+
+  document.title = "Job Application for Forward Deployed Product Engineer at Pallet";
+  document.body.innerText = "Forward Deployed Product Engineer Pallet San Francisco or New York";
+  document.body.textContent = document.body.innerText;
+  document.querySelector = (selector) => {
+    if (selector === "h1") {
+      return {
+        textContent: "Forward Deployed Product Engineer"
+      };
+    }
+    return null;
+  };
+
+  const fakeWindow = {
+    location: {
+      href: currentUrl
+    },
+    setTimeout,
+    clearTimeout,
+    fetch(url, options) {
+      fetchedUrl = url;
+      fetchOptions = options;
+      return Promise.resolve({
+        ok: true,
+        json() {
+          return Promise.resolve({
+            title: "Forward Deployed Product Engineer",
+            company_name: "Pallet",
+            first_published: "2026-06-19T12:45:42-04:00",
+            updated_at: "2026-06-19T12:45:42-04:00",
+            application_deadline: null
+          });
+        }
+      });
+    }
+  };
+  const context = vm.createContext({
+    console,
+    document,
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+
+  const result = await fakeWindow.JobDateLens.scanOnce();
+  const badge = document.getElementById("jobdatelens-badge");
+  const rows = badge.childNodes[1].childNodes.map((row) => [
+    row.childNodes[0].textContent,
+    row.childNodes[1].childNodes[0].textContent
+  ]);
+
+  assert.equal(fetchedUrl, "https://boards-api.greenhouse.io/v1/boards/pallet/jobs/5169663007");
+  assert.equal(fetchOptions.cache, "no-store");
+  assert.equal(fetchOptions.credentials, "omit");
+  assert.equal(fetchOptions.headers.Accept, fakeWindow.JobDateLens.JSON_ACCEPT_HEADER);
+  assert.equal(result.found, true);
+  assert.equal(result.source, "greenhouse-api");
+  assert.deepEqual(
+    rows.map((row) => row[0]),
+    ["Role", "Company", "Posted", "Deadline", "Last updated"]
+  );
+  assert.deepEqual(rows.find((row) => row[0] === "Deadline"), ["Deadline", "Not provided"]);
+});
+
+test("scanOnce finds Greenhouse board token from custom page embed hints", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const currentUrl = "https://ripple.com/careers/all-jobs/job/7724653/?gh_jid=7724653";
+  const document = createFakeDocument();
+  let fetchedUrl = "";
+
+  document.title = "Open Role - Senior Software Engineer (Full Stack) | Ripple";
+  document.body.innerText = "Senior Software Engineer Full Stack Ripple";
+  document.body.textContent = document.body.innerText;
+  document.querySelector = (selector) => {
+    if (selector === "h1") {
+      return {
+        textContent: "Senior Software Engineer (Full Stack)"
+      };
+    }
+    return null;
+  };
+  document.querySelectorAll = (selector) => {
+    if (selector === "script[src], link[href], a[href]") {
+      return [
+        {
+          href: "https://boards.greenhouse.io/embed/job_board/js?for=ripple"
+        }
+      ];
+    }
+    if (selector === "a[href]") {
+      return [];
+    }
+    return [];
+  };
+
+  const fakeWindow = {
+    location: {
+      href: currentUrl
+    },
+    setTimeout,
+    clearTimeout,
+    fetch(url) {
+      fetchedUrl = url;
+      return Promise.resolve({
+        ok: true,
+        json() {
+          return Promise.resolve({
+            title: "Senior Software Engineer (Full Stack)",
+            company_name: "Ripple ",
+            first_published: "2026-03-17T12:09:44-04:00",
+            updated_at: "2026-06-05T19:22:10-04:00",
+            application_deadline: null
+          });
+        }
+      });
+    }
+  };
+  const context = vm.createContext({
+    console,
+    document,
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+
+  const result = await fakeWindow.JobDateLens.scanOnce();
+
+  assert.equal(fetchedUrl, "https://boards-api.greenhouse.io/v1/boards/ripple/jobs/7724653");
+  assert.equal(result.found, true);
+  assert.equal(result.source, "greenhouse-api");
+});
+
 test("scanOnce fetches derived YC JobPosting HTML through the background service worker", async () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   const currentUrl = "https://www.workatastartup.com/jobs/97127";

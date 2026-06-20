@@ -12,6 +12,18 @@
   var FETCH_YC_JOB_POSTING_MESSAGE = "jobdatelens:fetchYcJobPosting";
   var HTML_ACCEPT_HEADER =
     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+  var JSON_ACCEPT_HEADER = "application/json";
+  var GREENHOUSE_API_ORIGIN = "https://boards-api.greenhouse.io";
+  var GREENHOUSE_CUSTOM_BOARD_TOKENS = {
+    "ripple.com": "ripple",
+    "www.mongodb.com": "mongodb"
+  };
+  var DATE_SOURCE_ORDER = {
+    posted: 10,
+    deadline: 20,
+    updated: 30,
+    start: 40
+  };
   var HTML_FALLBACK_CANONICALIZERS = {
     "jobs.lever.co": function (url) {
       return getCanonicalLeverPostingUrl(url.href) || url.href;
@@ -102,6 +114,62 @@
     );
   }
 
+  function createDateSource(options) {
+    var config = options || {};
+
+    return {
+      key: config.key || "",
+      label: config.label || "",
+      raw: firstText(config.raw),
+      source: config.source || "",
+      field: config.field || "",
+      usage: config.usage || config.key || "",
+      priority: typeof config.priority === "number" ? config.priority : 0,
+      showWhenMissing: Boolean(config.showWhenMissing)
+    };
+  }
+
+  function collectSchemaDateSourcesFromNode(node) {
+    var sources = [
+      createDateSource({
+        key: "posted",
+        label: "Posted",
+        raw: node && node.datePosted,
+        source: "schema.org",
+        field: "datePosted",
+        usage: "datePosted",
+        priority: 100,
+        showWhenMissing: true
+      }),
+      createDateSource({
+        key: "deadline",
+        label: "Deadline",
+        raw: node && node.validThrough,
+        source: "schema.org",
+        field: "validThrough",
+        usage: "validThrough",
+        priority: 90,
+        showWhenMissing: true
+      })
+    ];
+
+    if (firstText(node && node.jobStartDate)) {
+      sources.push(
+        createDateSource({
+          key: "start",
+          label: "Start date",
+          raw: node.jobStartDate,
+          source: "schema.org",
+          field: "jobStartDate",
+          usage: "datePosted",
+          priority: 80
+        })
+      );
+    }
+
+    return sources;
+  }
+
   function createCandidate(node, sourceIndex, path) {
     return {
       node: node,
@@ -110,7 +178,9 @@
       title: firstText(node.title || node.name),
       company: getCompanyName(node),
       datePostedRaw: firstText(node.datePosted),
-      validThroughRaw: firstText(node.validThrough)
+      validThroughRaw: firstText(node.validThrough),
+      jobStartDateRaw: firstText(node.jobStartDate),
+      dateSources: collectSchemaDateSourcesFromNode(node)
     };
   }
 
@@ -562,6 +632,13 @@
     };
   }
 
+  function getGreenhouseNoResultNotice() {
+    return {
+      message: "No trustworthy job data found",
+      helper: "Greenhouse returned job data, but it does not match the visible job."
+    };
+  }
+
   function startOfLocalDay(date) {
     return new Date(date.getFullYear(), date.getMonth(), date.getDate());
   }
@@ -625,10 +702,10 @@
     var days;
 
     if (dateInfo.state === "missing") {
-      return "no validThrough provided";
+      return "no deadline provided";
     }
     if (dateInfo.state === "invalid") {
-      return "validThrough is invalid";
+      return "deadline is invalid";
     }
     if (now.getTime() > dateInfo.date.getTime()) {
       days = Math.floor((startOfLocalDay(now) - startOfLocalDay(dateInfo.date)) / MS_PER_DAY);
@@ -651,6 +728,254 @@
     return "expires in " + days + " days";
   }
 
+  function formatUpdatedHelper(dateInfo, now) {
+    var days;
+
+    if (dateInfo.state === "missing") {
+      return "last updated date is missing";
+    }
+    if (dateInfo.state === "invalid") {
+      return "last updated date is invalid";
+    }
+
+    days = Math.floor((startOfLocalDay(now) - startOfLocalDay(dateInfo.date)) / MS_PER_DAY);
+    if (days === 0) {
+      return "updated today";
+    }
+    if (days === 1) {
+      return "updated 1 day ago";
+    }
+    if (days > 1) {
+      return "updated " + days + " days ago";
+    }
+    if (days === -1) {
+      return "updates tomorrow";
+    }
+    return "updates in " + Math.abs(days) + " days";
+  }
+
+  function formatStartHelper(dateInfo, now) {
+    var days;
+
+    if (dateInfo.state === "missing") {
+      return "start date is missing";
+    }
+    if (dateInfo.state === "invalid") {
+      return "start date is invalid";
+    }
+
+    days = Math.ceil((startOfLocalDay(dateInfo.date) - startOfLocalDay(now)) / MS_PER_DAY);
+    if (days === 0) {
+      return "starts today";
+    }
+    if (days === 1) {
+      return "starts tomorrow";
+    }
+    if (days > 1) {
+      return "starts in " + days + " days";
+    }
+    if (days === -1) {
+      return "started 1 day ago";
+    }
+    return "started " + Math.abs(days) + " days ago";
+  }
+
+  function getFallbackDateSources(candidate) {
+    var sources = [
+      createDateSource({
+        key: "posted",
+        label: "Posted",
+        raw: candidate && candidate.datePostedRaw,
+        source: candidate && candidate.sourceProvider ? candidate.sourceProvider : "schema.org",
+        field: "datePosted",
+        usage: "datePosted",
+        priority: 100,
+        showWhenMissing: true
+      }),
+      createDateSource({
+        key: "deadline",
+        label: "Deadline",
+        raw: candidate && candidate.validThroughRaw,
+        source: candidate && candidate.sourceProvider ? candidate.sourceProvider : "schema.org",
+        field: "validThrough",
+        usage: "validThrough",
+        priority: 90,
+        showWhenMissing: true
+      })
+    ];
+
+    if (candidate && candidate.jobStartDateRaw) {
+      sources.push(
+        createDateSource({
+          key: "start",
+          label: "Start date",
+          raw: candidate.jobStartDateRaw,
+          source: candidate.sourceProvider || "schema.org",
+          field: "jobStartDate",
+          usage: "datePosted",
+          priority: 80
+        })
+      );
+    }
+
+    return sources;
+  }
+
+  function compareDateSourceOrder(left, right) {
+    var leftOrder = Object.prototype.hasOwnProperty.call(DATE_SOURCE_ORDER, left.key)
+      ? DATE_SOURCE_ORDER[left.key]
+      : 999;
+    var rightOrder = Object.prototype.hasOwnProperty.call(DATE_SOURCE_ORDER, right.key)
+      ? DATE_SOURCE_ORDER[right.key]
+      : 999;
+
+    if (leftOrder !== rightOrder) {
+      return leftOrder - rightOrder;
+    }
+    if (right.priority !== left.priority) {
+      return right.priority - left.priority;
+    }
+    return left.field.localeCompare(right.field);
+  }
+
+  function getDateSourceComparableValue(source) {
+    var dateInfo;
+
+    if (!source || !source.raw) {
+      return "";
+    }
+
+    dateInfo = parseSchemaDate(source.raw, source.usage);
+    if (dateInfo.state === "valid") {
+      return String(dateInfo.date.getTime());
+    }
+
+    return source.raw;
+  }
+
+  function normalizeDateSources(sources) {
+    var grouped = {};
+    var normalized = [];
+
+    (sources || []).forEach(function (source) {
+      if (!source || !source.key) {
+        return;
+      }
+      if (!source.raw && !source.showWhenMissing) {
+        return;
+      }
+      if (!grouped[source.key]) {
+        grouped[source.key] = [];
+      }
+      grouped[source.key].push(source);
+    });
+
+    Object.keys(grouped).forEach(function (key) {
+      var candidates = grouped[key].slice().sort(function (left, right) {
+        if (right.priority !== left.priority) {
+          return right.priority - left.priority;
+        }
+        return left.field.localeCompare(right.field);
+      });
+      var selected = Object.assign({}, candidates[0]);
+      var selectedComparable = getDateSourceComparableValue(selected);
+      var rawValues = {};
+      var conflicts = [];
+
+      candidates.forEach(function (candidate) {
+        var comparable = getDateSourceComparableValue(candidate);
+
+        if (!comparable) {
+          return;
+        }
+        rawValues[comparable] = true;
+      });
+
+      if (Object.keys(rawValues).length > 1) {
+        conflicts = candidates
+          .filter(function (candidate) {
+            return (
+              candidate.raw &&
+              getDateSourceComparableValue(candidate) !== selectedComparable
+            );
+          })
+          .map(function (candidate) {
+            return candidate.source + ": " + candidate.field + "=" + candidate.raw;
+          });
+      }
+
+      if (conflicts.length) {
+        selected.conflicts = conflicts;
+      }
+      normalized.push(selected);
+    });
+
+    return normalized.sort(compareDateSourceOrder);
+  }
+
+  function getDateSourceByKey(dateSources, key) {
+    var matches = (dateSources || []).filter(function (source) {
+      return source.key === key;
+    });
+
+    return matches.length ? matches[0] : null;
+  }
+
+  function getSourceHelper(dateSource) {
+    if (!dateSource || !dateSource.source || !dateSource.field) {
+      return "";
+    }
+
+    return dateSource.source + ": " + dateSource.field;
+  }
+
+  function formatDateSourceRow(dateSource, now) {
+    var dateInfo = parseSchemaDate(dateSource.raw, dateSource.usage);
+    var helper = "";
+    var sourceHelper = getSourceHelper(dateSource);
+    var state = dateInfo.state;
+    var value;
+
+    if (dateInfo.state === "missing") {
+      value = "Not provided";
+    } else {
+      value = formatDate(dateInfo);
+    }
+
+    if (dateSource.key === "posted") {
+      helper = formatPostedHelper(dateInfo, now);
+    } else if (dateSource.key === "deadline") {
+      helper = formatExpiryHelper(dateInfo, now);
+      if (dateInfo.state === "valid" && now.getTime() > dateInfo.date.getTime()) {
+        state = "expired";
+      }
+    } else if (dateSource.key === "updated") {
+      helper = formatUpdatedHelper(dateInfo, now);
+    } else if (dateSource.key === "start") {
+      helper = formatStartHelper(dateInfo, now);
+    }
+
+    if (sourceHelper) {
+      helper = helper ? helper + " (" + sourceHelper + ")" : sourceHelper;
+    }
+    if (dateSource.conflicts && dateSource.conflicts.length) {
+      helper =
+        (helper ? helper + " " : "") +
+        "Source mismatch: " +
+        dateSource.conflicts.join("; ");
+      state = state === "valid" ? "warning" : state;
+    }
+
+    return {
+      key: dateSource.key,
+      label: dateSource.label,
+      value: value,
+      helper: helper,
+      state: state,
+      dateInfo: dateInfo
+    };
+  }
+
   function getStatus(postedDate, validThrough, now) {
     if (postedDate.state === "missing" && validThrough.state === "missing") {
       return { kind: "missing", label: "Missing dates" };
@@ -671,24 +996,48 @@
   }
 
   function formatJobPosting(candidate, now) {
-    var postedDate = parseSchemaDate(candidate.datePostedRaw, "datePosted");
-    var validThrough = parseSchemaDate(candidate.validThroughRaw, "validThrough");
     var currentTime = now || new Date();
+    var candidateDateSources =
+      candidate &&
+      candidate.sourceProvider === "Greenhouse API" &&
+      Array.isArray(candidate.dateSources) &&
+      candidate.dateSources.length
+        ? candidate.dateSources
+        : getFallbackDateSources(candidate);
+    var dateSources = normalizeDateSources(candidateDateSources);
+    var dateRows = dateSources.map(function (dateSource) {
+      return formatDateSourceRow(dateSource, currentTime);
+    });
+    var postedRow = getDateSourceByKey(dateRows, "posted") || {
+      value: "Not provided",
+      helper: "datePosted is missing",
+      state: "missing",
+      dateInfo: parseSchemaDate("", "datePosted")
+    };
+    var deadlineRow = getDateSourceByKey(dateRows, "deadline") || {
+      value: "Not provided",
+      helper: "no deadline provided",
+      state: "missing",
+      dateInfo: parseSchemaDate("", "validThrough")
+    };
+    var postedDate = postedRow.dateInfo;
+    var validThrough = deadlineRow.dateInfo;
 
     return {
       title: candidate.title || "Untitled job posting",
       company: candidate.company || "Unknown company",
       postedDate: {
-        label: formatDate(postedDate),
-        helper: formatPostedHelper(postedDate, currentTime),
+        label: postedRow.value,
+        helper: postedRow.helper,
         state: postedDate.state
       },
       validThrough: {
-        label: formatDate(validThrough),
-        helper: formatExpiryHelper(validThrough, currentTime),
+        label: deadlineRow.value,
+        helper: deadlineRow.helper,
         state: validThrough.state
       },
       status: getStatus(postedDate, validThrough, currentTime),
+      dateRows: dateRows,
       score: candidate.score
     };
   }
@@ -706,7 +1055,7 @@
 
     valueWrap.className = "jdl-value-wrap";
     valueNode.className = "jdl-value";
-    if (state === "missing" || state === "invalid") {
+    if (state === "missing" || state === "invalid" || state === "warning") {
       valueNode.className += " jdl-value--problem";
     }
     if (state === "expired") {
@@ -955,6 +1304,252 @@
     };
   }
 
+  function normalizeGreenhouseBoardToken(value) {
+    var token = String(value || "").trim().toLowerCase();
+
+    return /^[a-z0-9-]+$/.test(token) ? token : null;
+  }
+
+  function normalizeGreenhouseJobId(value) {
+    var jobId = String(value || "").trim();
+
+    return /^\d+$/.test(jobId) ? jobId : null;
+  }
+
+  function getGreenhouseApiUrl(boardToken, jobId) {
+    var token = normalizeGreenhouseBoardToken(boardToken);
+    var id = normalizeGreenhouseJobId(jobId);
+
+    if (!token || !id) {
+      return null;
+    }
+
+    return (
+      GREENHOUSE_API_ORIGIN +
+      "/v1/boards/" +
+      encodeURIComponent(token) +
+      "/jobs/" +
+      encodeURIComponent(id)
+    );
+  }
+
+  function getGreenhouseTokenFromUrl(value) {
+    var parsed;
+    var token;
+    var baseUrl =
+      typeof window !== "undefined" && window.location
+        ? window.location.href
+        : "https://example.com/";
+
+    try {
+      parsed = new URL(String(value || ""), baseUrl);
+    } catch (error) {
+      return null;
+    }
+
+    if (parsed.hostname.toLowerCase() === "job-boards.greenhouse.io") {
+      token = parsed.pathname.split("/").filter(Boolean)[0];
+      return normalizeGreenhouseBoardToken(token);
+    }
+
+    if (
+      parsed.hostname.toLowerCase() === "boards.greenhouse.io" &&
+      parsed.pathname.indexOf("/embed/job_board") === 0
+    ) {
+      return normalizeGreenhouseBoardToken(parsed.searchParams.get("for"));
+    }
+
+    return null;
+  }
+
+  function getGreenhouseNodeUrl(node) {
+    if (!node) {
+      return "";
+    }
+
+    return (
+      node.src ||
+      node.href ||
+      (typeof node.getAttribute === "function"
+        ? node.getAttribute("src") || node.getAttribute("href")
+        : "")
+    );
+  }
+
+  function getGreenhouseBoardTokenFromDocument(doc) {
+    var nodes = [];
+    var token = null;
+
+    if (!doc) {
+      return null;
+    }
+
+    if (doc.scripts) {
+      nodes = nodes.concat(Array.prototype.slice.call(doc.scripts || []));
+    }
+    if (typeof doc.querySelectorAll === "function") {
+      nodes = nodes.concat(
+        Array.prototype.slice.call(doc.querySelectorAll("script[src], link[href], a[href]") || [])
+      );
+    }
+
+    nodes.some(function (node) {
+      token = getGreenhouseTokenFromUrl(getGreenhouseNodeUrl(node));
+      return Boolean(token);
+    });
+
+    return token;
+  }
+
+  function getGreenhouseJobIdFromUrl(parsed) {
+    var pathSegments;
+    var index;
+    var queryJobId = normalizeGreenhouseJobId(parsed.searchParams.get("gh_jid"));
+
+    if (queryJobId) {
+      return queryJobId;
+    }
+
+    pathSegments = parsed.pathname.split("/").filter(Boolean);
+    for (index = pathSegments.length - 1; index >= 0; index -= 1) {
+      if (/^\d+$/.test(pathSegments[index])) {
+        return pathSegments[index];
+      }
+    }
+
+    return null;
+  }
+
+  function getGreenhouseLookupRequest(doc, pageUrl) {
+    var parsed;
+    var hostname;
+    var pathSegments;
+    var boardToken = null;
+    var jobId = null;
+    var apiUrl;
+
+    try {
+      parsed = new URL(String(pageUrl || ""));
+    } catch (error) {
+      return null;
+    }
+
+    if (parsed.protocol !== "https:") {
+      return null;
+    }
+
+    hostname = parsed.hostname.toLowerCase();
+    pathSegments = parsed.pathname.split("/").filter(Boolean);
+
+    if (hostname === "job-boards.greenhouse.io") {
+      boardToken = pathSegments[0];
+      if (pathSegments[1] === "jobs") {
+        jobId = pathSegments[2];
+      }
+    } else if (hostname === "boards.greenhouse.io") {
+      boardToken = pathSegments[0];
+      if (pathSegments[1] === "jobs") {
+        jobId = pathSegments[2];
+      }
+    } else {
+      jobId = getGreenhouseJobIdFromUrl(parsed);
+      if (jobId) {
+        boardToken =
+          getGreenhouseBoardTokenFromDocument(doc) ||
+          GREENHOUSE_CUSTOM_BOARD_TOKENS[hostname] ||
+          null;
+      }
+    }
+
+    boardToken = normalizeGreenhouseBoardToken(boardToken);
+    jobId = normalizeGreenhouseJobId(jobId);
+    apiUrl = getGreenhouseApiUrl(boardToken, jobId);
+
+    return apiUrl
+      ? {
+          boardToken: boardToken,
+          jobId: jobId,
+          apiUrl: apiUrl
+        }
+      : null;
+  }
+
+  function collectGreenhouseDateSources(job) {
+    return [
+      createDateSource({
+        key: "posted",
+        label: "Posted",
+        raw: job && (job.first_published || job.published_at),
+        source: "Greenhouse API",
+        field: job && job.first_published ? "first_published" : "published_at",
+        usage: "datePosted",
+        priority: 110,
+        showWhenMissing: true
+      }),
+      createDateSource({
+        key: "deadline",
+        label: "Deadline",
+        raw: job && job.application_deadline,
+        source: "Greenhouse API",
+        field: "application_deadline",
+        usage: "validThrough",
+        priority: 100,
+        showWhenMissing: true
+      }),
+      createDateSource({
+        key: "updated",
+        label: "Last updated",
+        raw: job && job.updated_at,
+        source: "Greenhouse API",
+        field: "updated_at",
+        usage: "datePosted",
+        priority: 90
+      })
+    ];
+  }
+
+  function createGreenhouseCandidate(job, lookupRequest) {
+    var dateSources = collectGreenhouseDateSources(job || {});
+
+    return {
+      node: job,
+      sourceIndex: 0,
+      path: "$.greenhouse",
+      sourceProvider: "Greenhouse API",
+      boardToken: lookupRequest && lookupRequest.boardToken,
+      jobId: lookupRequest && lookupRequest.jobId,
+      title: firstText(job && job.title),
+      company: firstText(job && job.company_name),
+      datePostedRaw: firstText(job && (job.first_published || job.published_at)),
+      validThroughRaw: firstText(job && job.application_deadline),
+      dateSources: dateSources
+    };
+  }
+
+  function scanGreenhouseJobPosting(job, lookupRequest, pageContext) {
+    var context = pageContext || {};
+    var candidate = createGreenhouseCandidate(job, lookupRequest);
+    var candidates = candidate.title || candidate.company ? [candidate] : [];
+    var staleCandidates = candidates.filter(function (entry) {
+      return isStaleJobPosting(entry, context);
+    });
+
+    return {
+      candidates: candidates,
+      selected: selectBestJobPosting(candidates, context),
+      staleCandidates: staleCandidates,
+      errors: []
+    };
+  }
+
+  function createSnapshot(result, readyState) {
+    return {
+      jsonLdTexts: [],
+      result: result,
+      readyState: readyState || "complete"
+    };
+  }
+
   function isCrossOriginUrl(targetUrl, pageUrl) {
     var target;
     var page;
@@ -1055,7 +1650,6 @@
       var toggleButton;
       var closeButton;
       var body;
-      var expiryState;
 
       if (!scanResult.selected) {
         removeBadge();
@@ -1065,7 +1659,6 @@
       removeNotice();
 
       model = formatJobPosting(scanResult.selected, new Date());
-      expiryState = model.status.kind === "expired" ? "expired" : model.validThrough.state;
 
       if (!badge) {
         badge = document.createElement("aside");
@@ -1124,12 +1717,9 @@
       body.className = "jdl-body";
       body.appendChild(createRow("Role", model.title, "", "valid"));
       body.appendChild(createRow("Company", model.company, "", "valid"));
-      body.appendChild(
-        createRow("Posted", model.postedDate.label, model.postedDate.helper, model.postedDate.state)
-      );
-      body.appendChild(
-        createRow("Expires", model.validThrough.label, model.validThrough.helper, expiryState)
-      );
+      model.dateRows.forEach(function (row) {
+        body.appendChild(createRow(row.label, row.value, row.helper, row.state));
+      });
 
       badge.replaceChildren(header, body);
     }
@@ -1327,6 +1917,50 @@
       });
     }
 
+    function fetchGreenhouseJobPosting(lookupRequest) {
+      var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      var options = {
+        cache: "no-store",
+        credentials: "omit",
+        headers: {
+          Accept: JSON_ACCEPT_HEADER
+        }
+      };
+      var timeoutId;
+
+      if (controller) {
+        options.signal = controller.signal;
+      }
+
+      return new Promise(function (resolve, reject) {
+        timeoutId = window.setTimeout(function () {
+          if (controller) {
+            controller.abort();
+          }
+          reject(new Error("Timed out after " + HTML_FETCH_TIMEOUT_MS + "ms."));
+        }, HTML_FETCH_TIMEOUT_MS);
+
+        window
+          .fetch(lookupRequest.apiUrl, options)
+          .then(function (response) {
+            if (!response.ok) {
+              throw new Error("HTTP " + response.status);
+            }
+            return response.json();
+          })
+          .then(
+            function (json) {
+              window.clearTimeout(timeoutId);
+              resolve(json || {});
+            },
+            function (error) {
+              window.clearTimeout(timeoutId);
+              reject(error);
+            }
+          );
+      });
+    }
+
     function fetchHtmlFallback(url, pageUrl) {
       if (isCrossOriginUrl(url, pageUrl) && getCanonicalLeverPostingUrl(url) === url) {
         return fetchCrossOriginFallbackHtml(url);
@@ -1345,6 +1979,8 @@
       var fallbackUrl;
       var linkedFallbackUrl;
       var ycLookupRequest;
+      var greenhouseLookupRequest;
+      var greenhouseJson;
       var htmlText;
 
       activeScanId = scanId;
@@ -1390,6 +2026,41 @@
       }
 
       pageUrl = window.location.href;
+      greenhouseLookupRequest = getGreenhouseLookupRequest(document, pageUrl);
+      if (greenhouseLookupRequest) {
+        try {
+          greenhouseJson = await fetchGreenhouseJobPosting(greenhouseLookupRequest);
+          if (scanId !== activeScanId) {
+            return summarizeScan(null, "greenhouse-api", "scan-superseded");
+          }
+          if (window.location.href !== pageUrl) {
+            removeNotice();
+            return summarizeScan(null, "greenhouse-api", "scan-superseded");
+          }
+
+          htmlSnapshot = createSnapshot(
+            scanGreenhouseJobPosting(greenhouseJson, greenhouseLookupRequest, pageContext)
+          );
+          if (htmlSnapshot.result.selected) {
+            renderBadge(htmlSnapshot.result);
+            return summarizeScan(htmlSnapshot, "greenhouse-api");
+          }
+
+          removeBadge();
+          notice = getGreenhouseNoResultNotice();
+          showNotice(notice.message, notice.helper, { persistent: true });
+          return summarizeScan(htmlSnapshot, "greenhouse-api", "greenhouse-no-match");
+        } catch (error) {
+          if (scanId !== activeScanId) {
+            return summarizeScan(null, "greenhouse-api", "scan-superseded");
+          }
+          if (window.location.href !== pageUrl) {
+            removeNotice();
+            return summarizeScan(null, "greenhouse-api", "scan-superseded");
+          }
+        }
+      }
+
       ycLookupRequest = getWorkAtStartupYcLookupRequest(document, pageUrl);
       if (ycLookupRequest) {
         try {
@@ -1491,6 +2162,15 @@
     parseSchemaDate: parseSchemaDate,
     scanDocument: scanDocument,
     scanHtmlText: scanHtmlText,
+    createDateSource: createDateSource,
+    normalizeDateSources: normalizeDateSources,
+    collectSchemaDateSourcesFromNode: collectSchemaDateSourcesFromNode,
+    collectGreenhouseDateSources: collectGreenhouseDateSources,
+    createGreenhouseCandidate: createGreenhouseCandidate,
+    scanGreenhouseJobPosting: scanGreenhouseJobPosting,
+    getGreenhouseApiUrl: getGreenhouseApiUrl,
+    getGreenhouseBoardTokenFromDocument: getGreenhouseBoardTokenFromDocument,
+    getGreenhouseLookupRequest: getGreenhouseLookupRequest,
     getCanonicalLeverPostingUrl: getCanonicalLeverPostingUrl,
     getHtmlFallbackUrl: getHtmlFallbackUrl,
     getLinkedLeverFallbackUrl: getLinkedLeverFallbackUrl,
@@ -1500,6 +2180,7 @@
     formatJobPosting: formatJobPosting,
     isJsonLdType: isJsonLdType,
     HTML_ACCEPT_HEADER: HTML_ACCEPT_HEADER,
+    JSON_ACCEPT_HEADER: JSON_ACCEPT_HEADER,
     HTML_FETCH_TIMEOUT_MS: HTML_FETCH_TIMEOUT_MS,
     TRANSIENT_NOTICE_DURATION_MS: TRANSIENT_NOTICE_DURATION_MS
   };

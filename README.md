@@ -1,6 +1,6 @@
 # JobDateLens
 
-Chrome extension that shows `datePosted` and `validThrough` from `JobPosting` JSON-LD on job pages.
+Chrome extension that shows public job posting dates on job pages.
 
 ## Load locally
 
@@ -22,7 +22,21 @@ If Chrome leaves the JobDateLens shortcut unassigned when the extension is insta
 Chrome leaves JobDateLens unassigned rather than letting it overwrite another extension's existing shortcut.
 This detects only JobDateLens's own unassigned Chrome extension command. Chrome extensions cannot inspect every system, browser, or user-defined shortcut, and some Chrome or operating system shortcuts may take priority.
 
-The extension scans the active page locally for `<script type="application/ld+json">` blocks. It does not call a backend, send page data anywhere, or request storage permissions.
+The extension scans the active page for public job date data. Most sites are read locally from `<script type="application/ld+json">` blocks. Greenhouse-backed pages may trigger a public, unauthenticated request to Greenhouse's Job Board API for the current job id so JobDateLens can read `first_published`, `updated_at`, and `application_deadline`.
+
+JobDateLens does not call a JobDateLens backend, send data to a private service, or request storage permissions.
+
+## Public date sources
+
+| Provider/source | Current source | Public date fields shown |
+| --- | --- | --- |
+| Generic `schema.org JobPosting` | Page JSON-LD | `datePosted`, `validThrough`, `jobStartDate` when present |
+| Greenhouse | Public Job Board API | `first_published`, `updated_at`, `application_deadline` |
+| Lever | Page JSON-LD, including existing apply-page fallback | Same `schema.org JobPosting` fields |
+| Ashby | Page JSON-LD | Same `schema.org JobPosting` fields |
+| YC / Work at a Startup | Derived YC job page JSON-LD fallback | Same `schema.org JobPosting` fields |
+
+Only public job-page or public job-board API fields are used. Authenticated employer APIs such as Greenhouse Harvest are out of scope.
 
 ## Test
 
