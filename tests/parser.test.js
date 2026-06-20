@@ -671,7 +671,7 @@ test("detects direct Greenhouse API lookup requests", () => {
   );
 });
 
-test("detects custom Greenhouse API lookup requests from embed hints and host mappings", () => {
+test("detects custom Greenhouse API lookup requests from embed hints", () => {
   const rippleDocument = {
     scripts: [],
     querySelectorAll(selector) {
@@ -681,6 +681,17 @@ test("detects custom Greenhouse API lookup requests from embed hints and host ma
           href: "https://boards.greenhouse.io/embed/job_board/js?for=ripple"
         }
       ];
+    }
+  };
+  const mongodbDocument = {
+    scripts: [
+      {
+        src: "https://boards.greenhouse.io/embed/job_board/js?for=mongodb"
+      }
+    ],
+    querySelectorAll(selector) {
+      assert.equal(selector, "script[src], link[href], a[href]");
+      return [];
     }
   };
 
@@ -697,7 +708,7 @@ test("detects custom Greenhouse API lookup requests from embed hints and host ma
   );
   assert.deepEqual(
     jobDateLens.getGreenhouseLookupRequest(
-      { querySelectorAll: () => [] },
+      mongodbDocument,
       "https://www.mongodb.com/careers/jobs/7851388"
     ),
     {
@@ -705,6 +716,16 @@ test("detects custom Greenhouse API lookup requests from embed hints and host ma
       jobId: "7851388",
       apiUrl: "https://boards-api.greenhouse.io/v1/boards/mongodb/jobs/7851388"
     }
+  );
+});
+
+test("does not guess Greenhouse board tokens for custom pages without embed hints", () => {
+  assert.equal(
+    jobDateLens.getGreenhouseLookupRequest(
+      { scripts: [], querySelectorAll: () => [] },
+      "https://www.mongodb.com/careers/jobs/7851388"
+    ),
+    null
   );
 });
 

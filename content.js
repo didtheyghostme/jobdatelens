@@ -14,10 +14,6 @@
     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
   var JSON_ACCEPT_HEADER = "application/json";
   var GREENHOUSE_API_ORIGIN = "https://boards-api.greenhouse.io";
-  var GREENHOUSE_CUSTOM_BOARD_TOKENS = {
-    "ripple.com": "ripple",
-    "www.mongodb.com": "mongodb"
-  };
   var DATE_SOURCE_ORDER = {
     posted: 10,
     deadline: 20,
@@ -1454,10 +1450,7 @@
     } else {
       jobId = getGreenhouseJobIdFromUrl(parsed);
       if (jobId) {
-        boardToken =
-          getGreenhouseBoardTokenFromDocument(doc) ||
-          GREENHOUSE_CUSTOM_BOARD_TOKENS[hostname] ||
-          null;
+        boardToken = getGreenhouseBoardTokenFromDocument(doc);
       }
     }
 
