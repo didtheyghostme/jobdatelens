@@ -231,6 +231,7 @@ test("scanOnce keeps non-Lever apply pages on current URL HTML fallback", async 
   const document = createFakeDocument();
   const parsedDocument = createJsonLdDocument("");
   let fetchedUrl = "";
+  let fetchOptions = null;
 
   const fakeWindow = {
     location: {
@@ -238,8 +239,9 @@ test("scanOnce keeps non-Lever apply pages on current URL HTML fallback", async 
     },
     setTimeout,
     clearTimeout,
-    fetch(url) {
+    fetch(url, options) {
       fetchedUrl = url;
+      fetchOptions = options;
       return Promise.resolve({
         ok: true,
         text() {
@@ -267,8 +269,208 @@ test("scanOnce keeps non-Lever apply pages on current URL HTML fallback", async 
   const result = await fakeWindow.JobDateLens.scanOnce();
 
   assert.equal(fetchedUrl, currentUrl);
+  assert.equal(fetchOptions.cache, "no-store");
+  assert.equal(fetchOptions.credentials, "include");
+  assert.equal(fetchOptions.headers.Accept, fakeWindow.JobDateLens.HTML_ACCEPT_HEADER);
   assert.equal(result.found, false);
   assert.equal(result.reason, "html-no-match");
+});
+
+test("scanOnce fetches derived YC JobPosting HTML through the background service worker", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const currentUrl = "https://www.workatastartup.com/jobs/97127";
+  const dataPage = JSON.stringify({
+    props: {
+      job: {
+        id: 97127
+      },
+      company: {
+        slug: "ruma-care"
+      }
+    }
+  });
+  const ycHtml = "<!doctype html><title>YC Job</title>";
+  const jsonLdText = JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "JobPosting",
+    title: "Product Engineer",
+    datePosted: "2026-06-19T07:42:33Z",
+    hiringOrganization: {
+      "@type": "Organization",
+      name: "Ruma Care"
+    }
+  });
+  const document = createFakeDocument();
+  const parsedDocument = createJsonLdDocument(jsonLdText);
+  let message = null;
+  let currentPageFetchCalled = false;
+
+  document.title = "Product Engineer at Ruma Care";
+  document.body.innerText = "Product Engineer Ruma Care";
+  document.body.textContent = document.body.innerText;
+  document.querySelector = (selector) => {
+    if (selector === "h1") {
+      return {
+        textContent: "Product Engineer"
+      };
+    }
+    if (selector === "[data-page]") {
+      return {
+        getAttribute(name) {
+          assert.equal(name, "data-page");
+          return dataPage;
+        }
+      };
+    }
+    return null;
+  };
+
+  const fakeWindow = {
+    location: {
+      href: currentUrl
+    },
+    setTimeout,
+    clearTimeout,
+    fetch() {
+      currentPageFetchCalled = true;
+      return Promise.reject(new Error("Current page fetch should not run"));
+    }
+  };
+  const fakeChrome = {
+    runtime: {
+      lastError: null,
+      sendMessage(request, callback) {
+        message = request;
+        callback({
+          ok: true,
+          htmlText: ycHtml,
+          url: "https://www.ycombinator.com/companies/ruma-care/jobs/fUj2G2Y-product-engineer"
+        });
+      }
+    }
+  };
+  const context = vm.createContext({
+    chrome: fakeChrome,
+    console,
+    document,
+    DOMParser: class {
+      parseFromString(htmlText, type) {
+        assert.equal(htmlText, ycHtml);
+        assert.equal(type, "text/html");
+        return parsedDocument;
+      }
+    },
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+
+  const result = await fakeWindow.JobDateLens.scanOnce();
+
+  assert.equal(message.type, "jobdatelens:fetchYcJobPosting");
+  assert.equal(message.jobId, 97127);
+  assert.equal(message.companySlug, "ruma-care");
+  assert.equal(currentPageFetchCalled, false);
+  assert.equal(result.found, true);
+  assert.equal(result.source, "yc-jsonld");
+  assert.equal(document.getElementById("jobdatelens-badge").tagName, "ASIDE");
+});
+
+test("scanOnce treats derived YC JobPosting HTML without datePosted as no data", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const currentUrl = "https://www.workatastartup.com/jobs/97127";
+  const dataPage = JSON.stringify({
+    props: {
+      job: {
+        id: 97127
+      },
+      company: {
+        slug: "ruma-care"
+      }
+    }
+  });
+  const ycHtml = "<!doctype html><title>YC Job</title>";
+  const jsonLdText = JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "JobPosting",
+    title: "Product Engineer",
+    hiringOrganization: {
+      "@type": "Organization",
+      name: "Ruma Care"
+    }
+  });
+  const document = createFakeDocument();
+  const parsedDocument = createJsonLdDocument(jsonLdText);
+  let currentPageFetchCalled = false;
+
+  document.title = "Product Engineer at Ruma Care";
+  document.body.innerText = "Product Engineer Ruma Care";
+  document.body.textContent = document.body.innerText;
+  document.querySelector = (selector) => {
+    if (selector === "h1") {
+      return {
+        textContent: "Product Engineer"
+      };
+    }
+    if (selector === "[data-page]") {
+      return {
+        getAttribute() {
+          return dataPage;
+        }
+      };
+    }
+    return null;
+  };
+
+  const fakeWindow = {
+    location: {
+      href: currentUrl
+    },
+    setTimeout,
+    clearTimeout,
+    fetch() {
+      currentPageFetchCalled = true;
+      return Promise.reject(new Error("Current page fetch should not run"));
+    }
+  };
+  const fakeChrome = {
+    runtime: {
+      lastError: null,
+      sendMessage(request, callback) {
+        callback({
+          ok: true,
+          htmlText: ycHtml,
+          url: "https://www.ycombinator.com/companies/ruma-care/jobs/fUj2G2Y-product-engineer"
+        });
+      }
+    }
+  };
+  const context = vm.createContext({
+    chrome: fakeChrome,
+    console,
+    document,
+    DOMParser: class {
+      parseFromString(htmlText, type) {
+        assert.equal(htmlText, ycHtml);
+        assert.equal(type, "text/html");
+        return parsedDocument;
+      }
+    },
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+
+  const result = await fakeWindow.JobDateLens.scanOnce();
+
+  assert.equal(currentPageFetchCalled, false);
+  assert.equal(result.found, false);
+  assert.equal(result.source, "yc-jsonld");
+  assert.equal(result.reason, "yc-jsonld-no-match");
+  assert.equal(document.getElementById("jobdatelens-badge"), null);
+  assert.equal(document.getElementById("jobdatelens-notice").tagName, "ASIDE");
 });
 
 test("scanOnce fetches linked Lever job HTML through the background service worker", async () => {

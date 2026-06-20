@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Shows datePosted and validThrough from JobPosting JSON-LD on job posting pages.",
   "permissions": ["activeTab", "scripting"],
-  "host_permissions": ["https://jobs.lever.co/*"],
+  "host_permissions": ["https://jobs.lever.co/*", "https://www.ycombinator.com/*"],
   "background": {
     "service_worker": "background.js"
   },

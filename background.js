@@ -7,6 +7,10 @@ var SHORTCUT_UNASSIGNED_TITLE =
 var SHORTCUT_WARNING_BADGE_TEXT = "!";
 var SHORTCUT_WARNING_BADGE_COLOR = "#D97706";
 var FETCH_HTML_FALLBACK_MESSAGE = "jobdatelens:fetchHtmlFallback";
+var FETCH_YC_JOB_POSTING_MESSAGE = "jobdatelens:fetchYcJobPosting";
+var HTML_ACCEPT_HEADER =
+  "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+var YC_ORIGIN = "https://www.ycombinator.com";
 
 function isSupportedPageUrl(url) {
   return typeof url === "string" && /^https?:\/\//i.test(url);
@@ -32,6 +36,132 @@ function getCanonicalLeverPostingUrl(value) {
     (pathSegments.length === 3 && pathSegments[2] === "apply")
   ) {
     return parsed.origin + "/" + pathSegments[0] + "/" + pathSegments[1];
+  }
+
+  return null;
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function decodeHtmlEntities(value) {
+  return String(value || "")
+    .replace(/&#x([0-9a-f]+);/gi, function (match, hex) {
+      var codePoint = parseInt(hex, 16);
+
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match;
+    })
+    .replace(/&#(\d+);/g, function (match, decimal) {
+      var codePoint = parseInt(decimal, 10);
+
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match;
+    })
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+function normalizeYcCompanySlug(value) {
+  var slug = String(value || "").trim().toLowerCase();
+
+  if (!/^[a-z0-9-]+$/.test(slug)) {
+    return null;
+  }
+
+  return slug;
+}
+
+function getYcCompanyUrl(companySlug) {
+  var slug = normalizeYcCompanySlug(companySlug);
+
+  return slug ? YC_ORIGIN + "/companies/" + encodeURIComponent(slug) : null;
+}
+
+function hasExactWaasJobId(value, jobId) {
+  var id = Number(jobId);
+  var idPattern;
+  var signupPattern;
+
+  if (!Number.isInteger(id) || id <= 0) {
+    return false;
+  }
+
+  idPattern = new RegExp('["\']id["\']\\s*:\\s*' + id + "\\b");
+  signupPattern = new RegExp("signup_job_id(?:%3D|=)" + id + "\\b", "i");
+
+  return idPattern.test(value) || signupPattern.test(value);
+}
+
+function validateYcJobPostingUrl(value, companySlug) {
+  var slug = normalizeYcCompanySlug(companySlug);
+  var parsed;
+  var expectedPrefix;
+
+  if (!slug) {
+    return null;
+  }
+
+  try {
+    parsed = new URL(String(value || ""), YC_ORIGIN);
+  } catch (error) {
+    return null;
+  }
+
+  expectedPrefix = "/companies/" + slug + "/jobs/";
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.hostname.toLowerCase() !== "www.ycombinator.com" ||
+    parsed.pathname.indexOf(expectedPrefix) !== 0
+  ) {
+    return null;
+  }
+
+  return parsed.origin + parsed.pathname;
+}
+
+function extractYcJobPostingUrlFromCompanyHtml(htmlText, jobId, companySlug) {
+  var slug = normalizeYcCompanySlug(companySlug);
+  var decoded;
+  var urlPattern;
+  var match;
+  var matchedUrl;
+  var trustedUrl;
+  var context;
+  var objectStart;
+  var objectEnd;
+
+  if (!slug || !Number.isInteger(Number(jobId)) || Number(jobId) <= 0) {
+    return null;
+  }
+
+  decoded = decodeHtmlEntities(htmlText);
+  urlPattern = new RegExp(
+    '(?:https:\\/\\/www\\.ycombinator\\.com)?(\\/companies\\/' +
+      escapeRegExp(slug) +
+      '\\/jobs\\/[^"\'<>\\s\\\\]+)',
+    "g"
+  );
+
+  while ((match = urlPattern.exec(decoded))) {
+    matchedUrl = match[1];
+    trustedUrl = validateYcJobPostingUrl(matchedUrl, slug);
+    if (!trustedUrl) {
+      continue;
+    }
+
+    objectStart = decoded.lastIndexOf("{", match.index);
+    objectEnd = decoded.indexOf("}", match.index);
+    context =
+      objectStart !== -1 && objectEnd !== -1 && objectEnd > match.index
+        ? decoded.slice(objectStart, objectEnd + 1)
+        : decoded.slice(Math.max(0, match.index - 500), match.index + 900);
+    if (hasExactWaasJobId(context, jobId)) {
+      return trustedUrl;
+    }
   }
 
   return null;
@@ -180,7 +310,10 @@ async function handleFetchHtmlFallbackMessage(request, fetchImpl) {
   try {
     response = await fetcher(fallbackUrl, {
       cache: "no-store",
-      credentials: "omit"
+      credentials: "omit",
+      headers: {
+        Accept: HTML_ACCEPT_HEADER
+      }
     });
 
     if (!response.ok) {
@@ -204,13 +337,90 @@ async function handleFetchHtmlFallbackMessage(request, fetchImpl) {
   }
 }
 
+async function handleFetchYcJobPostingMessage(request, fetchImpl) {
+  var jobId = Number(request && request.jobId);
+  var companySlug = normalizeYcCompanySlug(request && request.companySlug);
+  var companyUrl;
+  var fetcher;
+  var companyResponse;
+  var companyHtml;
+  var jobUrl;
+  var jobResponse;
+  var jobHtml;
+  var fetchOptions = {
+    cache: "no-store",
+    credentials: "omit",
+    headers: {
+      Accept: HTML_ACCEPT_HEADER
+    }
+  };
+
+  if (!Number.isInteger(jobId) || jobId <= 0 || !companySlug) {
+    return {
+      ok: false,
+      message: "Unsupported YC job lookup."
+    };
+  }
+
+  companyUrl = getYcCompanyUrl(companySlug);
+  fetcher = fetchImpl || fetch;
+
+  try {
+    companyResponse = await fetcher(companyUrl, fetchOptions);
+    if (!companyResponse.ok) {
+      return {
+        ok: false,
+        message: "HTTP " + companyResponse.status
+      };
+    }
+
+    companyHtml = await companyResponse.text();
+    jobUrl = extractYcJobPostingUrlFromCompanyHtml(companyHtml, jobId, companySlug);
+    if (!jobUrl) {
+      return {
+        ok: false,
+        message: "No exact YC job match."
+      };
+    }
+
+    jobResponse = await fetcher(jobUrl, fetchOptions);
+    if (!jobResponse.ok) {
+      return {
+        ok: false,
+        message: "HTTP " + jobResponse.status
+      };
+    }
+
+    jobHtml = await jobResponse.text();
+    return {
+      ok: true,
+      htmlText: jobHtml,
+      url: jobUrl
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error && error.message ? error.message : String(error)
+    };
+  }
+}
+
 function handleRuntimeMessage(request, sender, sendResponse) {
-  if (!request || request.type !== FETCH_HTML_FALLBACK_MESSAGE) {
+  if (!request) {
     return false;
   }
 
-  handleFetchHtmlFallbackMessage(request).then(sendResponse);
-  return true;
+  if (request.type === FETCH_HTML_FALLBACK_MESSAGE) {
+    handleFetchHtmlFallbackMessage(request).then(sendResponse);
+    return true;
+  }
+
+  if (request.type === FETCH_YC_JOB_POSTING_MESSAGE) {
+    handleFetchYcJobPostingMessage(request).then(sendResponse);
+    return true;
+  }
+
+  return false;
 }
 
 if (typeof chrome !== "undefined" && chrome.action && chrome.action.onClicked) {
@@ -229,11 +439,19 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     EXECUTE_ACTION_COMMAND: EXECUTE_ACTION_COMMAND,
     FETCH_HTML_FALLBACK_MESSAGE: FETCH_HTML_FALLBACK_MESSAGE,
+    FETCH_YC_JOB_POSTING_MESSAGE: FETCH_YC_JOB_POSTING_MESSAGE,
+    HTML_ACCEPT_HEADER: HTML_ACCEPT_HEADER,
+    decodeHtmlEntities: decodeHtmlEntities,
+    extractYcJobPostingUrlFromCompanyHtml: extractYcJobPostingUrlFromCompanyHtml,
     getCanonicalLeverPostingUrl: getCanonicalLeverPostingUrl,
     getCommandByName: getCommandByName,
+    getYcCompanyUrl: getYcCompanyUrl,
     handleFetchHtmlFallbackMessage: handleFetchHtmlFallbackMessage,
+    handleFetchYcJobPostingMessage: handleFetchYcJobPostingMessage,
     handleRuntimeMessage: handleRuntimeMessage,
+    hasExactWaasJobId: hasExactWaasJobId,
     isCommandShortcutUnassigned: isCommandShortcutUnassigned,
-    isSupportedPageUrl: isSupportedPageUrl
+    isSupportedPageUrl: isSupportedPageUrl,
+    validateYcJobPostingUrl: validateYcJobPostingUrl
   };
 }

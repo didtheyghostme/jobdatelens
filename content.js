@@ -9,6 +9,9 @@
   var TRANSIENT_NOTICE_DURATION_MS = 3000;
   var HTML_FETCH_TIMEOUT_MS = 1500;
   var FETCH_HTML_FALLBACK_MESSAGE = "jobdatelens:fetchHtmlFallback";
+  var FETCH_YC_JOB_POSTING_MESSAGE = "jobdatelens:fetchYcJobPosting";
+  var HTML_ACCEPT_HEADER =
+    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
   var HTML_FALLBACK_CANONICALIZERS = {
     "jobs.lever.co": function (url) {
       return getCanonicalLeverPostingUrl(url.href) || url.href;
@@ -785,6 +788,18 @@
     return scanDocument(parseHtmlDocument(htmlText, parser), pageContext || {});
   }
 
+  function snapshotWithoutSelected(snapshot) {
+    if (!snapshot || !snapshot.result) {
+      return snapshot;
+    }
+
+    return Object.assign({}, snapshot, {
+      result: Object.assign({}, snapshot.result, {
+        selected: null
+      })
+    });
+  }
+
   function getCanonicalLeverPostingUrl(value) {
     var parsed;
     var pathSegments;
@@ -853,6 +868,91 @@
     }
 
     return null;
+  }
+
+  function parseWorkAtStartupDataPage(value) {
+    try {
+      return JSON.parse(String(value || ""));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function getWorkAtStartupJobIdFromUrl(value) {
+    var parsed;
+    var match;
+    var jobId;
+
+    try {
+      parsed = new URL(String(value || ""));
+    } catch (error) {
+      return null;
+    }
+
+    if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "www.workatastartup.com") {
+      return null;
+    }
+
+    match = parsed.pathname.match(/^\/jobs\/(\d+)\/?$/);
+    if (!match) {
+      return null;
+    }
+
+    jobId = Number(match[1]);
+    return Number.isInteger(jobId) && jobId > 0 ? jobId : null;
+  }
+
+  function getDataPageAttributeValue(doc) {
+    var node;
+    var value;
+
+    if (!doc || typeof doc.querySelector !== "function") {
+      return "";
+    }
+
+    node = doc.querySelector("[data-page]");
+    if (!node) {
+      return "";
+    }
+
+    if (typeof node.getAttribute === "function") {
+      value = node.getAttribute("data-page");
+      if (value) {
+        return value;
+      }
+    }
+
+    if (node.dataset && node.dataset.page) {
+      return node.dataset.page;
+    }
+
+    if (node.attributes && node.attributes["data-page"]) {
+      return node.attributes["data-page"];
+    }
+
+    return "";
+  }
+
+  function getWorkAtStartupYcLookupRequest(doc, pageUrl) {
+    var jobId = getWorkAtStartupJobIdFromUrl(pageUrl);
+    var dataPage = parseWorkAtStartupDataPage(getDataPageAttributeValue(doc));
+    var props = dataPage && dataPage.props ? dataPage.props : {};
+    var pageJobId = props.job && Number(props.job.id);
+    var companySlug = props.company && props.company.slug;
+
+    if (!jobId || !Number.isInteger(pageJobId) || pageJobId !== jobId) {
+      return null;
+    }
+
+    companySlug = String(companySlug || "").trim().toLowerCase();
+    if (!/^[a-z0-9-]+$/.test(companySlug)) {
+      return null;
+    }
+
+    return {
+      jobId: jobId,
+      companySlug: companySlug
+    };
   }
 
   function isCrossOriginUrl(targetUrl, pageUrl) {
@@ -1052,7 +1152,10 @@
       var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
       var options = {
         cache: "no-store",
-        credentials: "include"
+        credentials: "include",
+        headers: {
+          Accept: HTML_ACCEPT_HEADER
+        }
       };
       var timeoutId;
 
@@ -1156,6 +1259,74 @@
       });
     }
 
+    function fetchYcJobPostingFallbackHtml(lookupRequest) {
+      var timeoutId;
+
+      return new Promise(function (resolve, reject) {
+        var settled = false;
+
+        function finish(callback) {
+          return function (value) {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            window.clearTimeout(timeoutId);
+            callback(value);
+          };
+        }
+
+        var resolveOnce = finish(resolve);
+        var rejectOnce = finish(reject);
+
+        timeoutId = window.setTimeout(function () {
+          rejectOnce(new Error("Timed out after " + HTML_FETCH_TIMEOUT_MS + "ms."));
+        }, HTML_FETCH_TIMEOUT_MS);
+
+        if (
+          typeof chrome === "undefined" ||
+          !chrome.runtime ||
+          typeof chrome.runtime.sendMessage !== "function"
+        ) {
+          rejectOnce(new Error("Background YC job fetch is not available."));
+          return;
+        }
+
+        try {
+          chrome.runtime.sendMessage(
+            {
+              type: FETCH_YC_JOB_POSTING_MESSAGE,
+              jobId: lookupRequest.jobId,
+              companySlug: lookupRequest.companySlug
+            },
+            function (response) {
+              var lastError = chrome.runtime && chrome.runtime.lastError;
+
+              if (lastError) {
+                rejectOnce(new Error(lastError.message || "Background YC job fetch failed."));
+                return;
+              }
+
+              if (!response || !response.ok) {
+                rejectOnce(
+                  new Error(
+                    response && response.message
+                      ? response.message
+                      : "Background YC job fetch failed."
+                  )
+                );
+                return;
+              }
+
+              resolveOnce(response.htmlText || "");
+            }
+          );
+        } catch (error) {
+          rejectOnce(error);
+        }
+      });
+    }
+
     function fetchHtmlFallback(url, pageUrl) {
       if (isCrossOriginUrl(url, pageUrl) && getCanonicalLeverPostingUrl(url) === url) {
         return fetchCrossOriginFallbackHtml(url);
@@ -1173,6 +1344,7 @@
       var pageUrl;
       var fallbackUrl;
       var linkedFallbackUrl;
+      var ycLookupRequest;
       var htmlText;
 
       activeScanId = scanId;
@@ -1218,6 +1390,48 @@
       }
 
       pageUrl = window.location.href;
+      ycLookupRequest = getWorkAtStartupYcLookupRequest(document, pageUrl);
+      if (ycLookupRequest) {
+        try {
+          htmlText = await fetchYcJobPostingFallbackHtml(ycLookupRequest);
+          if (scanId !== activeScanId) {
+            return summarizeScan(null, "yc-jsonld", "scan-superseded");
+          }
+          if (window.location.href !== pageUrl) {
+            removeNotice();
+            return summarizeScan(null, "yc-jsonld", "scan-superseded");
+          }
+
+          htmlSnapshot = scanHtmlText(htmlText, pageContext);
+          if (htmlSnapshot.result.selected && htmlSnapshot.result.selected.datePostedRaw) {
+            renderBadge(htmlSnapshot.result);
+            return summarizeScan(htmlSnapshot, "yc-jsonld");
+          }
+
+          removeBadge();
+          notice = getHtmlFallbackNoResultNotice();
+          showNotice(notice.message, notice.helper, { persistent: true });
+          return summarizeScan(
+            snapshotWithoutSelected(htmlSnapshot),
+            "yc-jsonld",
+            "yc-jsonld-no-match"
+          );
+        } catch (error) {
+          if (scanId !== activeScanId) {
+            return summarizeScan(null, "yc-jsonld", "scan-superseded");
+          }
+          if (window.location.href !== pageUrl) {
+            removeNotice();
+            return summarizeScan(null, "yc-jsonld", "scan-superseded");
+          }
+
+          removeBadge();
+          notice = getHtmlFallbackNoResultNotice();
+          showNotice(notice.message, notice.helper, { persistent: true });
+          return summarizeScan(domSnapshot, "yc-jsonld", "yc-jsonld-no-match");
+        }
+      }
+
       fallbackUrl = getHtmlFallbackUrl(pageUrl);
       linkedFallbackUrl = getLinkedLeverFallbackUrl(document);
       if (fallbackUrl === pageUrl && linkedFallbackUrl) {
@@ -1280,8 +1494,12 @@
     getCanonicalLeverPostingUrl: getCanonicalLeverPostingUrl,
     getHtmlFallbackUrl: getHtmlFallbackUrl,
     getLinkedLeverFallbackUrl: getLinkedLeverFallbackUrl,
+    getWorkAtStartupJobIdFromUrl: getWorkAtStartupJobIdFromUrl,
+    getWorkAtStartupYcLookupRequest: getWorkAtStartupYcLookupRequest,
+    parseWorkAtStartupDataPage: parseWorkAtStartupDataPage,
     formatJobPosting: formatJobPosting,
     isJsonLdType: isJsonLdType,
+    HTML_ACCEPT_HEADER: HTML_ACCEPT_HEADER,
     HTML_FETCH_TIMEOUT_MS: HTML_FETCH_TIMEOUT_MS,
     TRANSIENT_NOTICE_DURATION_MS: TRANSIENT_NOTICE_DURATION_MS
   };

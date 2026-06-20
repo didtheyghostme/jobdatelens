@@ -525,6 +525,98 @@ test("extracts canonical Lever fallback URLs from rendered page links", () => {
   assert.equal(jobDateLens.getLinkedLeverFallbackUrl(document), canonicalUrl);
 });
 
+test("extracts WAAS YC lookup metadata only from matching Work at a Startup job pages", () => {
+  const dataPage = JSON.stringify({
+    props: {
+      job: {
+        id: 97127
+      },
+      company: {
+        slug: "ruma-care"
+      }
+    }
+  });
+  const document = {
+    querySelector(selector) {
+      assert.equal(selector, "[data-page]");
+      return {
+        getAttribute(name) {
+          assert.equal(name, "data-page");
+          return dataPage;
+        }
+      };
+    }
+  };
+
+  assert.deepEqual(
+    jobDateLens.getWorkAtStartupYcLookupRequest(
+      document,
+      "https://www.workatastartup.com/jobs/97127"
+    ),
+    {
+      jobId: 97127,
+      companySlug: "ruma-care"
+    }
+  );
+  assert.equal(
+    jobDateLens.getWorkAtStartupYcLookupRequest(
+      document,
+      "https://www.workatastartup.com/jobs/97128"
+    ),
+    null
+  );
+  assert.equal(
+    jobDateLens.getWorkAtStartupYcLookupRequest(
+      document,
+      "https://example.com/jobs/97127"
+    ),
+    null
+  );
+});
+
+test("rejects unsafe or incomplete WAAS YC lookup metadata", () => {
+  const documents = [
+    {
+      querySelector() {
+        return null;
+      }
+    },
+    {
+      querySelector() {
+        return {
+          getAttribute() {
+            return "not json";
+          }
+        };
+      }
+    },
+    {
+      querySelector() {
+        return {
+          getAttribute() {
+            return JSON.stringify({
+              props: {
+                job: { id: 97127 },
+                company: { slug: "ruma-care/../other" }
+              }
+            });
+          }
+        };
+      }
+    }
+  ];
+
+  documents.forEach((document) => {
+    assert.equal(
+      jobDateLens.getWorkAtStartupYcLookupRequest(
+        document,
+        "https://www.workatastartup.com/jobs/97127"
+      ),
+      null
+    );
+  });
+});
+
 test("rejects unsafe or unsupported linked Lever fallback URLs", () => {
   const documents = [
     {
