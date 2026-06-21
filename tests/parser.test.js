@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const jobDateLens = require("../content.js");
+const { parserFixtures } = require("./provider-fixtures");
 
 const defaultContext = {
   title: "Senior Product Manager at Acme Analytics",
@@ -66,6 +67,41 @@ function parserReturningDocument(expectedHtml, doc) {
     }
   };
 }
+
+function assertExpectedDateRows(actualRows, expectedRows) {
+  assert.deepEqual(
+    actualRows.map((row) => [row.key, row.state]),
+    expectedRows
+  );
+}
+
+test("provider parser fixtures match expected date rows", () => {
+  parserFixtures.forEach((fixture) => {
+    const result = jobDateLens.scanJsonLdTexts(fixture.page.jsonLdTexts, {
+      title: fixture.page.title,
+      heading: fixture.page.heading,
+      visibleText: fixture.page.visibleText
+    });
+
+    assert.equal(Boolean(result.selected), fixture.expected.found, fixture.name);
+    if (!fixture.expected.found) {
+      assert.equal(result.staleCandidates.length, fixture.expected.stale || 0, fixture.name);
+      return;
+    }
+
+    const model = jobDateLens.formatJobPosting(
+      result.selected,
+      new Date("2026-06-20T12:00:00-04:00")
+    );
+
+    assert.equal(model.title, fixture.expected.title, fixture.name);
+    if (fixture.expected.company) {
+      assert.equal(model.company, fixture.expected.company, fixture.name);
+    }
+    assert.equal(model.status.kind, fixture.expected.status, fixture.name);
+    assertExpectedDateRows(model.dateRows, fixture.expected.dateRows);
+  });
+});
 
 test("finds a single JobPosting JSON-LD block", () => {
   const result = scan(json(jobPosting()));

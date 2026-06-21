@@ -4,6 +4,8 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
+const { browserFixtures } = require("./provider-fixtures");
+
 function createFakeElement(document, tagName) {
   const childNodes = [];
   let elementId = "";
@@ -104,18 +106,19 @@ function createFakeDocument() {
 
 function createJsonLdDocument(jsonLdText, options = {}) {
   const document = createFakeDocument();
+  const jsonLdTexts = Array.isArray(jsonLdText)
+    ? jsonLdText
+    : jsonLdText
+      ? [jsonLdText]
+      : [];
 
   document.title = options.title || "";
   document.body.innerText = options.visibleText || "";
   document.body.textContent = document.body.innerText;
-  document.scripts = jsonLdText
-    ? [
-        {
-          type: "application/ld+json",
-          textContent: jsonLdText
-        }
-      ]
-    : [];
+  document.scripts = jsonLdTexts.map((text) => ({
+    type: "application/ld+json",
+    textContent: text
+  }));
   document.querySelector = (selector) => {
     if (selector === "h1" && options.heading) {
       return { textContent: options.heading };
@@ -125,6 +128,171 @@ function createJsonLdDocument(jsonLdText, options = {}) {
 
   return document;
 }
+
+function createDocumentFromFixture(fixture) {
+  const document = createFakeDocument();
+  const page = fixture.page || {};
+  const jsonLdScripts = (page.jsonLdTexts || []).map((text) => ({
+    type: "application/ld+json",
+    textContent: text
+  }));
+  const extraScripts = page.scripts || [];
+
+  document.title = page.title || "";
+  document.body.innerText = page.visibleText || "";
+  document.body.textContent = document.body.innerText;
+  document.scripts = jsonLdScripts.concat(extraScripts);
+  document.links = page.links || [];
+  document.querySelector = (selector) => {
+    if (selector === "h1" && page.heading) {
+      return { textContent: page.heading };
+    }
+    if (selector === "[data-page]" && page.dataPage) {
+      return {
+        getAttribute(name) {
+          assert.equal(name, "data-page");
+          return JSON.stringify(page.dataPage);
+        }
+      };
+    }
+    return null;
+  };
+  document.querySelectorAll = (selector) => {
+    if (selector === "a[href]") {
+      return document.links;
+    }
+    if (selector === "script[src], link[href], a[href]") {
+      return extraScripts.concat(page.links || [], page.assets || []);
+    }
+    return [];
+  };
+
+  return document;
+}
+
+function getFixtureParser(fixture) {
+  const fetchConfig = fixture.fetch || fixture.background || {};
+  const htmlText = fetchConfig.htmlText || "";
+  const parsedJsonLdTexts = fetchConfig.parsedJsonLdTexts || [];
+
+  return class {
+    parseFromString(actualHtmlText, type) {
+      assert.equal(actualHtmlText, htmlText, fixture.name);
+      assert.equal(type, "text/html", fixture.name);
+      return createJsonLdDocument(parsedJsonLdTexts);
+    }
+  };
+}
+
+function createFixtureChrome(fixture, capture) {
+  if (!fixture.background) {
+    return undefined;
+  }
+
+  return {
+    runtime: {
+      lastError: null,
+      sendMessage(request, callback) {
+        capture.backgroundRequest = request;
+        assert.equal(request.type, fixture.background.expectedType, fixture.name);
+        callback({
+          ok: true,
+          htmlText: fixture.background.htmlText
+        });
+      }
+    }
+  };
+}
+
+function createFixtureWindow(fixture, capture) {
+  return {
+    location: {
+      href: fixture.url
+    },
+    setTimeout,
+    clearTimeout,
+    fetch(url, options) {
+      capture.fetchRequest = { url, options };
+      if (!fixture.fetch) {
+        return Promise.reject(new Error("Fixture did not expect window.fetch"));
+      }
+      assert.equal(url, fixture.fetch.expectedUrl, fixture.name);
+      if (fixture.fetch.json) {
+        return Promise.resolve({
+          ok: true,
+          json() {
+            return Promise.resolve(fixture.fetch.json);
+          }
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        text() {
+          return Promise.resolve(fixture.fetch.htmlText || "");
+        }
+      });
+    }
+  };
+}
+
+function assertFixtureAttempts(debug, expectedAttempts, fixtureName) {
+  expectedAttempts.forEach(([source, status, reason]) => {
+    const attempt = debug.attempts.find((entry) => entry.source === source);
+
+    assert.ok(attempt, `${fixtureName}: missing ${source} debug attempt`);
+    assert.equal(attempt.status, status, `${fixtureName}: ${source} status`);
+    if (reason) {
+      assert.equal(attempt.reason, reason, `${fixtureName}: ${source} reason`);
+    }
+  });
+}
+
+async function runBrowserFixture(fixture) {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const document = createDocumentFromFixture(fixture);
+  const capture = {};
+  const fakeWindow = createFixtureWindow(fixture, capture);
+  const fakeChrome = createFixtureChrome(fixture, capture);
+  const context = vm.createContext({
+    chrome: fakeChrome,
+    console,
+    document,
+    DOMParser: getFixtureParser(fixture),
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+
+  return {
+    capture,
+    document,
+    result: await fakeWindow.JobDateLens.scanOnce(),
+    window: fakeWindow
+  };
+}
+
+test("provider browser fixtures expose expected diagnostics", async () => {
+  for (const fixture of browserFixtures) {
+    const { result, window } = await runBrowserFixture(fixture);
+
+    assert.equal(result.found, fixture.expected.found, fixture.name);
+    assert.equal(result.source, fixture.expected.source, fixture.name);
+    if (fixture.expected.reason) {
+      assert.equal(result.reason, fixture.expected.reason, fixture.name);
+    }
+    assert.ok(result.debug, `${fixture.name}: missing debug payload`);
+    assert.equal(result.debug.pageUrl, fixture.url, fixture.name);
+    assert.equal(result.debug.selectedSource, fixture.expected.selectedSource, fixture.name);
+    assert.deepEqual(
+      Array.from(result.debug.dateRows, (row) => [row.key, row.state]),
+      fixture.expected.dateRows,
+      fixture.name
+    );
+    assertFixtureAttempts(result.debug, fixture.expected.attempts, fixture.name);
+    assert.equal(window.JobDateLens.getLastScanDebug(), result.debug, fixture.name);
+  }
+});
 
 test("scanOnce treats failed HTML fallback after navigation as superseded", async () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");

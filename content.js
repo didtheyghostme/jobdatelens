@@ -1038,6 +1038,89 @@
     };
   }
 
+  function compactDateRowForDebug(row) {
+    return {
+      key: row.key,
+      label: row.label,
+      value: row.value,
+      state: row.state,
+      helper: row.helper
+    };
+  }
+
+  function getSelectedCandidateDebug(candidate) {
+    var model;
+
+    if (!candidate) {
+      return null;
+    }
+
+    model = formatJobPosting(candidate, new Date());
+    return {
+      title: model.title,
+      company: model.company,
+      path: candidate.path || "",
+      sourceProvider: candidate.sourceProvider || "schema.org",
+      status: model.status.kind,
+      dateRows: model.dateRows.map(compactDateRowForDebug)
+    };
+  }
+
+  function getErrorMessage(error) {
+    return error && error.message ? error.message : String(error || "");
+  }
+
+  function createScanDebug(pageUrl) {
+    return {
+      pageUrl: String(pageUrl || ""),
+      selectedSource: "",
+      dateRows: [],
+      attempts: []
+    };
+  }
+
+  function addDebugAttempt(debug, options) {
+    var config = options || {};
+    var snapshot = config.snapshot || null;
+    var result = snapshot && snapshot.result ? snapshot.result : null;
+    var selected = result ? getSelectedCandidateDebug(result.selected) : null;
+    var attempt = {
+      source: config.source || "",
+      status: config.status || "skipped",
+      candidates: result && Array.isArray(result.candidates) ? result.candidates.length : 0,
+      stale:
+        result && Array.isArray(result.staleCandidates) ? result.staleCandidates.length : 0,
+      errors: result && Array.isArray(result.errors) ? result.errors.length : 0
+    };
+
+    if (!debug) {
+      return attempt;
+    }
+    if (snapshot && Array.isArray(snapshot.jsonLdTexts)) {
+      attempt.jsonLdScripts = snapshot.jsonLdTexts.length;
+    }
+    if (config.reason) {
+      attempt.reason = config.reason;
+    }
+    if (config.lookup) {
+      attempt.lookup = config.lookup;
+    }
+    if (config.error) {
+      attempt.error = getErrorMessage(config.error);
+    }
+    if (selected) {
+      attempt.selected = selected;
+    }
+
+    debug.attempts.push(attempt);
+    if (attempt.status === "selected" && selected) {
+      debug.selectedSource = attempt.source;
+      debug.dateRows = selected.dateRows;
+    }
+
+    return attempt;
+  }
+
   function createRow(label, value, helper, state) {
     var row = document.createElement("div");
     var labelNode = document.createElement("div");
@@ -1467,6 +1550,76 @@
       : null;
   }
 
+  function getGreenhouseLookupDebugInfo(doc, pageUrl) {
+    var request = getGreenhouseLookupRequest(doc, pageUrl);
+    var parsed;
+    var hostname;
+    var pathSegments;
+    var boardToken = "";
+    var jobId = "";
+    var reason = "";
+
+    if (request) {
+      return {
+        request: request,
+        lookup: {
+          boardToken: request.boardToken,
+          jobId: request.jobId,
+          apiUrl: request.apiUrl
+        },
+        skipReason: ""
+      };
+    }
+
+    try {
+      parsed = new URL(String(pageUrl || ""));
+    } catch (error) {
+      return {
+        request: null,
+        lookup: {},
+        skipReason: "invalid-url"
+      };
+    }
+
+    if (parsed.protocol !== "https:") {
+      return {
+        request: null,
+        lookup: {},
+        skipReason: "unsupported-url"
+      };
+    }
+
+    hostname = parsed.hostname.toLowerCase();
+    pathSegments = parsed.pathname.split("/").filter(Boolean);
+    if (hostname === "job-boards.greenhouse.io" || hostname === "boards.greenhouse.io") {
+      boardToken = normalizeGreenhouseBoardToken(pathSegments[0]) || "";
+      jobId =
+        pathSegments[1] === "jobs" ? normalizeGreenhouseJobId(pathSegments[2]) || "" : "";
+    } else {
+      jobId = getGreenhouseJobIdFromUrl(parsed) || "";
+      if (jobId) {
+        boardToken = getGreenhouseBoardTokenFromDocument(doc) || "";
+      }
+    }
+
+    if (!jobId) {
+      reason = "missing-job-id";
+    } else if (!boardToken) {
+      reason = "missing-board-token";
+    } else {
+      reason = "invalid-lookup";
+    }
+
+    return {
+      request: null,
+      lookup: {
+        boardToken: boardToken,
+        jobId: jobId
+      },
+      skipReason: reason
+    };
+  }
+
   function collectGreenhouseDateSources(job) {
     return [
       createDateSource({
@@ -1562,6 +1715,7 @@
     var collapsed = false;
     var noticeTimer = null;
     var activeScanId = 0;
+    var lastScanDebug = null;
 
     function resetInteractionForNewUrl() {
       if (window.location.href !== currentUrl) {
@@ -1717,8 +1871,8 @@
       badge.replaceChildren(header, body);
     }
 
-    function summarizeScan(snapshot, source, reason) {
-      return {
+    function summarizeScan(snapshot, source, reason, debug) {
+      var summary = {
         found: Boolean(snapshot && snapshot.result && snapshot.result.selected),
         candidates: snapshot && snapshot.result ? snapshot.result.candidates.length : 0,
         errors: snapshot && snapshot.result ? snapshot.result.errors.length : 0,
@@ -1729,6 +1883,13 @@
         source: source || "",
         reason: reason || ""
       };
+
+      if (debug) {
+        summary.debug = debug;
+      }
+      lastScanDebug = debug || null;
+
+      return summary;
     }
 
     function fetchCurrentPageHtml(url) {
@@ -1968,24 +2129,26 @@
       var domSnapshot;
       var htmlSnapshot;
       var notice;
-      var pageUrl;
+      var pageUrl = window.location.href;
       var fallbackUrl;
       var linkedFallbackUrl;
       var ycLookupRequest;
+      var ycLookupDebug;
+      var greenhouseLookupDebug;
       var greenhouseLookupRequest;
       var greenhouseJson;
       var htmlText;
+      var debug = createScanDebug(pageUrl);
 
       activeScanId = scanId;
 
       if (!document.body) {
-        return {
-          found: false,
-          candidates: 0,
-          errors: 0,
-          stale: 0,
+        addDebugAttempt(debug, {
+          source: "dom-jsonld",
+          status: "skipped",
           reason: "document-not-ready"
-        };
+        });
+        return summarizeScan(null, "", "document-not-ready", debug);
       }
 
       resetInteractionForNewUrl();
@@ -1996,10 +2159,16 @@
 
       pageContext = getPageContext(document);
       domSnapshot = scanDocument(document, pageContext);
+      addDebugAttempt(debug, {
+        source: "dom-jsonld",
+        status: domSnapshot.result.selected ? "selected" : "no-match",
+        snapshot: domSnapshot,
+        reason: domSnapshot.result.selected ? "" : "no-selected-jobposting"
+      });
 
       if (domSnapshot.result.selected) {
         renderBadge(domSnapshot.result);
-        return summarizeScan(domSnapshot, "dom");
+        return summarizeScan(domSnapshot, "dom", "", debug);
       }
 
       if (
@@ -2009,91 +2178,204 @@
           domSnapshot.readyState
         )
       ) {
+        addDebugAttempt(debug, {
+          source: "html-fallback",
+          status: "skipped",
+          reason:
+            domSnapshot.readyState && domSnapshot.readyState !== "complete"
+              ? "document-not-ready"
+              : "fallback-not-needed"
+        });
         notice = getNoResultNotice(
           domSnapshot.result,
           domSnapshot.jsonLdTexts,
           domSnapshot.readyState
         );
         showNotice(notice.message, notice.helper);
-        return summarizeScan(domSnapshot, "dom");
+        return summarizeScan(domSnapshot, "dom", "", debug);
       }
 
-      pageUrl = window.location.href;
-      greenhouseLookupRequest = getGreenhouseLookupRequest(document, pageUrl);
+      greenhouseLookupDebug = getGreenhouseLookupDebugInfo(document, pageUrl);
+      greenhouseLookupRequest = greenhouseLookupDebug.request;
       if (greenhouseLookupRequest) {
         try {
           greenhouseJson = await fetchGreenhouseJobPosting(greenhouseLookupRequest);
           if (scanId !== activeScanId) {
-            return summarizeScan(null, "greenhouse-api", "scan-superseded");
+            addDebugAttempt(debug, {
+              source: "greenhouse-api",
+              status: "superseded",
+              reason: "scan-superseded",
+              lookup: greenhouseLookupDebug.lookup
+            });
+            return summarizeScan(null, "greenhouse-api", "scan-superseded", debug);
           }
           if (window.location.href !== pageUrl) {
             removeNotice();
-            return summarizeScan(null, "greenhouse-api", "scan-superseded");
+            addDebugAttempt(debug, {
+              source: "greenhouse-api",
+              status: "superseded",
+              reason: "scan-superseded",
+              lookup: greenhouseLookupDebug.lookup
+            });
+            return summarizeScan(null, "greenhouse-api", "scan-superseded", debug);
           }
 
           htmlSnapshot = createSnapshot(
             scanGreenhouseJobPosting(greenhouseJson, greenhouseLookupRequest, pageContext)
           );
           if (htmlSnapshot.result.selected) {
+            addDebugAttempt(debug, {
+              source: "greenhouse-api",
+              status: "selected",
+              snapshot: htmlSnapshot,
+              lookup: greenhouseLookupDebug.lookup
+            });
             renderBadge(htmlSnapshot.result);
-            return summarizeScan(htmlSnapshot, "greenhouse-api");
+            return summarizeScan(htmlSnapshot, "greenhouse-api", "", debug);
           }
 
+          addDebugAttempt(debug, {
+            source: "greenhouse-api",
+            status: "no-match",
+            reason: "greenhouse-no-match",
+            snapshot: htmlSnapshot,
+            lookup: greenhouseLookupDebug.lookup
+          });
           removeBadge();
           notice = getGreenhouseNoResultNotice();
           showNotice(notice.message, notice.helper, { persistent: true });
-          return summarizeScan(htmlSnapshot, "greenhouse-api", "greenhouse-no-match");
+          return summarizeScan(htmlSnapshot, "greenhouse-api", "greenhouse-no-match", debug);
         } catch (error) {
           if (scanId !== activeScanId) {
-            return summarizeScan(null, "greenhouse-api", "scan-superseded");
+            addDebugAttempt(debug, {
+              source: "greenhouse-api",
+              status: "superseded",
+              reason: "scan-superseded",
+              lookup: greenhouseLookupDebug.lookup
+            });
+            return summarizeScan(null, "greenhouse-api", "scan-superseded", debug);
           }
           if (window.location.href !== pageUrl) {
             removeNotice();
-            return summarizeScan(null, "greenhouse-api", "scan-superseded");
+            addDebugAttempt(debug, {
+              source: "greenhouse-api",
+              status: "superseded",
+              reason: "scan-superseded",
+              lookup: greenhouseLookupDebug.lookup
+            });
+            return summarizeScan(null, "greenhouse-api", "scan-superseded", debug);
           }
+
+          addDebugAttempt(debug, {
+            source: "greenhouse-api",
+            status: "failed",
+            reason: "fetch-failed",
+            lookup: greenhouseLookupDebug.lookup,
+            error: error
+          });
         }
+      } else {
+        addDebugAttempt(debug, {
+          source: "greenhouse-api",
+          status: "skipped",
+          reason: greenhouseLookupDebug.skipReason || "no-lookup-request",
+          lookup: greenhouseLookupDebug.lookup
+        });
       }
 
       ycLookupRequest = getWorkAtStartupYcLookupRequest(document, pageUrl);
+      ycLookupDebug = ycLookupRequest
+        ? {
+            jobId: ycLookupRequest.jobId,
+            companySlug: ycLookupRequest.companySlug
+          }
+        : null;
       if (ycLookupRequest) {
         try {
           htmlText = await fetchYcJobPostingFallbackHtml(ycLookupRequest);
           if (scanId !== activeScanId) {
-            return summarizeScan(null, "yc-jsonld", "scan-superseded");
+            addDebugAttempt(debug, {
+              source: "yc-jsonld",
+              status: "superseded",
+              reason: "scan-superseded",
+              lookup: ycLookupDebug
+            });
+            return summarizeScan(null, "yc-jsonld", "scan-superseded", debug);
           }
           if (window.location.href !== pageUrl) {
             removeNotice();
-            return summarizeScan(null, "yc-jsonld", "scan-superseded");
+            addDebugAttempt(debug, {
+              source: "yc-jsonld",
+              status: "superseded",
+              reason: "scan-superseded",
+              lookup: ycLookupDebug
+            });
+            return summarizeScan(null, "yc-jsonld", "scan-superseded", debug);
           }
 
           htmlSnapshot = scanHtmlText(htmlText, pageContext);
           if (htmlSnapshot.result.selected && htmlSnapshot.result.selected.datePostedRaw) {
+            addDebugAttempt(debug, {
+              source: "yc-jsonld",
+              status: "selected",
+              snapshot: htmlSnapshot,
+              lookup: ycLookupDebug
+            });
             renderBadge(htmlSnapshot.result);
-            return summarizeScan(htmlSnapshot, "yc-jsonld");
+            return summarizeScan(htmlSnapshot, "yc-jsonld", "", debug);
           }
 
+          htmlSnapshot = snapshotWithoutSelected(htmlSnapshot);
+          addDebugAttempt(debug, {
+            source: "yc-jsonld",
+            status: "no-match",
+            reason: "yc-jsonld-no-match",
+            snapshot: htmlSnapshot,
+            lookup: ycLookupDebug
+          });
           removeBadge();
           notice = getHtmlFallbackNoResultNotice();
           showNotice(notice.message, notice.helper, { persistent: true });
-          return summarizeScan(
-            snapshotWithoutSelected(htmlSnapshot),
-            "yc-jsonld",
-            "yc-jsonld-no-match"
-          );
+          return summarizeScan(htmlSnapshot, "yc-jsonld", "yc-jsonld-no-match", debug);
         } catch (error) {
           if (scanId !== activeScanId) {
-            return summarizeScan(null, "yc-jsonld", "scan-superseded");
+            addDebugAttempt(debug, {
+              source: "yc-jsonld",
+              status: "superseded",
+              reason: "scan-superseded",
+              lookup: ycLookupDebug
+            });
+            return summarizeScan(null, "yc-jsonld", "scan-superseded", debug);
           }
           if (window.location.href !== pageUrl) {
             removeNotice();
-            return summarizeScan(null, "yc-jsonld", "scan-superseded");
+            addDebugAttempt(debug, {
+              source: "yc-jsonld",
+              status: "superseded",
+              reason: "scan-superseded",
+              lookup: ycLookupDebug
+            });
+            return summarizeScan(null, "yc-jsonld", "scan-superseded", debug);
           }
 
+          addDebugAttempt(debug, {
+            source: "yc-jsonld",
+            status: "failed",
+            reason: "fetch-failed",
+            lookup: ycLookupDebug,
+            error: error
+          });
           removeBadge();
           notice = getHtmlFallbackNoResultNotice();
           showNotice(notice.message, notice.helper, { persistent: true });
-          return summarizeScan(domSnapshot, "yc-jsonld", "yc-jsonld-no-match");
+          return summarizeScan(domSnapshot, "yc-jsonld", "yc-jsonld-no-match", debug);
         }
+      } else {
+        addDebugAttempt(debug, {
+          source: "yc-jsonld",
+          status: "skipped",
+          reason: "no-lookup-request"
+        });
       }
 
       fallbackUrl = getHtmlFallbackUrl(pageUrl);
@@ -2104,41 +2386,88 @@
       try {
         htmlText = await fetchHtmlFallback(fallbackUrl, pageUrl);
         if (scanId !== activeScanId) {
-          return summarizeScan(null, "html", "scan-superseded");
+          addDebugAttempt(debug, {
+            source: "html-fallback",
+            status: "superseded",
+            reason: "scan-superseded",
+            lookup: { url: fallbackUrl }
+          });
+          return summarizeScan(null, "html", "scan-superseded", debug);
         }
         if (window.location.href !== pageUrl) {
           removeNotice();
-          return summarizeScan(null, "html", "scan-superseded");
+          addDebugAttempt(debug, {
+            source: "html-fallback",
+            status: "superseded",
+            reason: "scan-superseded",
+            lookup: { url: fallbackUrl }
+          });
+          return summarizeScan(null, "html", "scan-superseded", debug);
         }
 
         htmlSnapshot = scanHtmlText(htmlText, pageContext);
         if (htmlSnapshot.result.selected) {
+          addDebugAttempt(debug, {
+            source: "html-fallback",
+            status: "selected",
+            snapshot: htmlSnapshot,
+            lookup: { url: fallbackUrl }
+          });
           renderBadge(htmlSnapshot.result);
-          return summarizeScan(htmlSnapshot, "html");
+          return summarizeScan(htmlSnapshot, "html", "", debug);
         }
 
+        addDebugAttempt(debug, {
+          source: "html-fallback",
+          status: "no-match",
+          reason: "html-no-match",
+          snapshot: htmlSnapshot,
+          lookup: { url: fallbackUrl }
+        });
         removeBadge();
         notice = getHtmlFallbackNoResultNotice();
         showNotice(notice.message, notice.helper, { persistent: true });
-        return summarizeScan(htmlSnapshot, "html", "html-no-match");
+        return summarizeScan(htmlSnapshot, "html", "html-no-match", debug);
       } catch (error) {
         if (scanId !== activeScanId) {
-          return summarizeScan(null, "html", "scan-superseded");
+          addDebugAttempt(debug, {
+            source: "html-fallback",
+            status: "superseded",
+            reason: "scan-superseded",
+            lookup: { url: fallbackUrl }
+          });
+          return summarizeScan(null, "html", "scan-superseded", debug);
         }
         if (window.location.href !== pageUrl) {
           removeNotice();
-          return summarizeScan(null, "html", "scan-superseded");
+          addDebugAttempt(debug, {
+            source: "html-fallback",
+            status: "superseded",
+            reason: "scan-superseded",
+            lookup: { url: fallbackUrl }
+          });
+          return summarizeScan(null, "html", "scan-superseded", debug);
         }
 
+        addDebugAttempt(debug, {
+          source: "html-fallback",
+          status: "failed",
+          reason: "fetch-failed",
+          lookup: { url: fallbackUrl },
+          error: error
+        });
         removeBadge();
         notice = getHtmlFetchFailureNotice(error);
         showNotice(notice.message, notice.helper, { persistent: true });
-        return summarizeScan(domSnapshot, "dom", "html-fetch-failed");
+        return summarizeScan(domSnapshot, "dom", "html-fetch-failed", debug);
       }
     }
 
     window.JobDateLens = Object.assign({}, api, {
-      scanOnce: scanOnce
+      scanOnce: scanOnce,
+      getLastScanDebug: function () {
+        return lastScanDebug;
+      }
     });
   }
 
