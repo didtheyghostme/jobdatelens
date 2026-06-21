@@ -2624,10 +2624,6 @@
             snapshot: htmlSnapshot,
             lookup: ashbyLookupDebug.lookup
           });
-          removeBadge();
-          notice = getHtmlFallbackNoResultNotice();
-          showNotice(notice.message, notice.helper, { persistent: true });
-          return summarizeScan(htmlSnapshot, "ashby-jsonld", "ashby-jsonld-no-match", debug);
         } catch (error) {
           if (scanId !== activeScanId) {
             addDebugAttempt(debug, {

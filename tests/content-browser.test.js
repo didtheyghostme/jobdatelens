@@ -592,6 +592,122 @@ test("scanOnce finds Greenhouse board token from custom page embed hints", async
   assert.equal(result.source, "greenhouse-api");
 });
 
+test("scanOnce falls through to current page HTML after Ashby no-match", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const jobId = "0cd9781c-e158-4b0c-9979-04ead270933a";
+  const currentUrl = `https://www.8090.ai/careers?ashby_jid=${jobId}`;
+  const ashbyHtml = "<!doctype html><title>Ashby Job</title>";
+  const currentHtml = "<!doctype html><title>Current Job</title>";
+  const jsonLdText = JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "JobPosting",
+    title: "Full Stack Engineer",
+    datePosted: "2026-05-04",
+    hiringOrganization: {
+      "@type": "Organization",
+      name: "8090 Solutions Inc"
+    }
+  });
+  const document = createFakeDocument();
+  const ashbyDocument = createJsonLdDocument([]);
+  const currentPageDocument = createJsonLdDocument(jsonLdText);
+  let message = null;
+  let fetchedUrl = "";
+
+  document.title = "Full Stack Engineer | 8090";
+  document.body.innerText = "Full Stack Engineer 8090 Solutions Inc";
+  document.body.textContent = document.body.innerText;
+  document.scripts = [
+    {
+      src: "https://jobs.ashbyhq.com/8090%20Solutions%20Inc/embed?version=2"
+    }
+  ];
+  document.querySelector = (selector) => {
+    if (selector === "h1") {
+      return {
+        textContent: "Full Stack Engineer"
+      };
+    }
+    return null;
+  };
+  document.querySelectorAll = (selector) => {
+    if (selector === "iframe[src], script[src], link[href], a[href]") {
+      return document.scripts;
+    }
+    if (selector === "a[href]" || selector === "script[src], link[href], a[href]") {
+      return [];
+    }
+    return [];
+  };
+
+  const fakeWindow = {
+    location: {
+      href: currentUrl
+    },
+    setTimeout,
+    clearTimeout,
+    fetch(url) {
+      fetchedUrl = url;
+      return Promise.resolve({
+        ok: true,
+        text() {
+          return Promise.resolve(currentHtml);
+        }
+      });
+    }
+  };
+  const fakeChrome = {
+    runtime: {
+      lastError: null,
+      sendMessage(request, callback) {
+        message = request;
+        callback({
+          ok: true,
+          htmlText: ashbyHtml
+        });
+      }
+    }
+  };
+  const context = vm.createContext({
+    chrome: fakeChrome,
+    console,
+    document,
+    DOMParser: class {
+      parseFromString(htmlText, type) {
+        assert.equal(type, "text/html");
+        if (htmlText === ashbyHtml) {
+          return ashbyDocument;
+        }
+        if (htmlText === currentHtml) {
+          return currentPageDocument;
+        }
+        throw new Error(`Unexpected HTML fixture: ${htmlText}`);
+      }
+    },
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+
+  const result = await fakeWindow.JobDateLens.scanOnce();
+  const ashbyAttempt = result.debug.attempts.find((attempt) => attempt.source === "ashby-jsonld");
+  const htmlAttempt = result.debug.attempts.find((attempt) => attempt.source === "html-fallback");
+
+  assert.equal(message.type, "jobdatelens:fetchAshbyJobPosting");
+  assert.equal(
+    message.jobUrl,
+    `https://jobs.ashbyhq.com/8090%20Solutions%20Inc/${jobId}?embed=js`
+  );
+  assert.equal(fetchedUrl, currentUrl);
+  assert.equal(result.found, true);
+  assert.equal(result.source, "html");
+  assert.equal(ashbyAttempt.status, "no-match");
+  assert.equal(ashbyAttempt.reason, "ashby-jsonld-no-match");
+  assert.equal(htmlAttempt.status, "selected");
+  assert.equal(document.getElementById("jobdatelens-badge").tagName, "ASIDE");
+});
+
 test("scanOnce fetches derived YC JobPosting HTML through the background service worker", async () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   const currentUrl = "https://www.workatastartup.com/jobs/97127";
