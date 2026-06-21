@@ -22,7 +22,7 @@ If Chrome leaves the JobDateLens shortcut unassigned when the extension is insta
 Chrome leaves JobDateLens unassigned rather than letting it overwrite another extension's existing shortcut.
 This detects only JobDateLens's own unassigned Chrome extension command. Chrome extensions cannot inspect every system, browser, or user-defined shortcut, and some Chrome or operating system shortcuts may take priority.
 
-The extension scans the active page for public job date data. Most sites are read locally from `<script type="application/ld+json">` blocks. Greenhouse-backed pages may trigger a public, unauthenticated request to Greenhouse's Job Board API for the current job id so JobDateLens can read `first_published`, `updated_at`, and `application_deadline`. Custom company Greenhouse pages are supported when the page exposes a public Greenhouse board token, such as a `boards.greenhouse.io/embed/job_board/js?for=<board>` script.
+The extension scans the active page for public job date data. Most sites are read locally from `<script type="application/ld+json">` blocks. Greenhouse-backed pages may trigger a public, unauthenticated request to Greenhouse's Job Board API for the current job id so JobDateLens can read `first_published`, `updated_at`, and `application_deadline`. Custom company Greenhouse pages are supported when the page exposes a public Greenhouse board token, such as a `boards.greenhouse.io/embed/job_board/js?for=<board>` script. Custom Ashby pages are supported when the page exposes a public `jobs.ashbyhq.com/<board>/embed` or Ashby job URL and the current URL includes an `ashby_jid` UUID; JobDateLens then reads the public Ashby-hosted job page's `JobPosting` JSON-LD.
 
 JobDateLens does not call a JobDateLens backend, send data to a private service, or request storage permissions.
 
@@ -33,10 +33,10 @@ JobDateLens does not call a JobDateLens backend, send data to a private service,
 | Generic `schema.org JobPosting` | Page JSON-LD | `datePosted`, `validThrough`, `jobStartDate` when present |
 | Greenhouse | Public Job Board API | `first_published`, `updated_at`, `application_deadline` |
 | Lever | Page JSON-LD, including existing apply-page fallback | Same `schema.org JobPosting` fields |
-| Ashby | Page JSON-LD | Same `schema.org JobPosting` fields |
+| Ashby | Page JSON-LD, including embedded public Ashby job-page fallback | Same `schema.org JobPosting` fields |
 | YC / Work at a Startup | Derived YC job page JSON-LD fallback | Same `schema.org JobPosting` fields |
 
-Only public job-page or public job-board API fields are used. Authenticated employer APIs such as Greenhouse Harvest are out of scope.
+Only public job-page or public job-board API fields are used. Authenticated employer APIs such as Greenhouse Harvest or private Ashby APIs are out of scope.
 
 ## Test
 

@@ -256,6 +256,94 @@ const browserFixtures = [
     }
   },
   {
+    name: "Ashby custom page with embedded board URL",
+    url:
+      "https://www.8090.ai/careers?ashby_jid=0cd9781c-e158-4b0c-9979-04ead270933a",
+    page: {
+      title: "Careers | 8090",
+      heading: "Lean team, top-notch talent.",
+      visibleText: "Loading open roles...",
+      scripts: [
+        {
+          src: "https://jobs.ashbyhq.com/8090%20Solutions%20Inc/embed?version=2"
+        }
+      ]
+    },
+    background: {
+      expectedType: "jobdatelens:fetchAshbyJobPosting",
+      expectedJobUrl:
+        "https://jobs.ashbyhq.com/8090%20Solutions%20Inc/0cd9781c-e158-4b0c-9979-04ead270933a?embed=js",
+      htmlText: "<!doctype html><title>Ashby Job</title>",
+      parsedPage: {
+        title: "Full Stack Engineer | 8090 Solutions Inc",
+        heading: "Full Stack Engineer",
+        visibleText: "Full Stack Engineer 8090 Solutions Inc"
+      },
+      parsedJsonLdTexts: [
+        json(
+          jobPosting({
+            title: "Full Stack Engineer",
+            datePosted: "2026-05-04",
+            validThrough: undefined,
+            identifier: {
+              "@type": "PropertyValue",
+              name: "8090 Solutions Inc",
+              value: "0cd9781c-e158-4b0c-9979-04ead270933a"
+            },
+            hiringOrganization: {
+              "@type": "Organization",
+              name: "8090 Solutions Inc"
+            }
+          })
+        )
+      ]
+    },
+    expected: {
+      found: true,
+      source: "ashby-jsonld",
+      selectedSource: "ashby-jsonld",
+      attempts: [
+        ["dom-jsonld", "no-match"],
+        ["greenhouse-api", "skipped"],
+        ["ashby-jsonld", "selected"]
+      ],
+      dateRows: [
+        ["posted", "valid"],
+        ["deadline", "missing"]
+      ]
+    }
+  },
+  {
+    name: "Ashby custom page without board URL",
+    url:
+      "https://www.8090.ai/careers?ashby_jid=0cd9781c-e158-4b0c-9979-04ead270933a",
+    page: {
+      title: "Careers | 8090",
+      heading: "Lean team, top-notch talent.",
+      visibleText: "Loading open roles..."
+    },
+    fetch: {
+      expectedUrl:
+        "https://www.8090.ai/careers?ashby_jid=0cd9781c-e158-4b0c-9979-04ead270933a",
+      htmlText: "<!doctype html><title>No JSON-LD</title>",
+      parsedJsonLdTexts: []
+    },
+    expected: {
+      found: false,
+      source: "html",
+      reason: "html-no-match",
+      selectedSource: "",
+      attempts: [
+        ["dom-jsonld", "no-match"],
+        ["greenhouse-api", "skipped"],
+        ["ashby-jsonld", "skipped", "missing-board-url"],
+        ["yc-jsonld", "skipped"],
+        ["html-fallback", "no-match"]
+      ],
+      dateRows: []
+    }
+  },
+  {
     name: "Lever apply page HTML fallback",
     url: "https://jobs.lever.co/shopback-2/4e119b8f-3c8d-47e6-9dde-f232930e752c/apply",
     page: {

@@ -137,6 +137,7 @@ function createDocumentFromFixture(fixture) {
     textContent: text
   }));
   const extraScripts = page.scripts || [];
+  const iframes = page.iframes || [];
 
   document.title = page.title || "";
   document.body.innerText = page.visibleText || "";
@@ -164,6 +165,9 @@ function createDocumentFromFixture(fixture) {
     if (selector === "script[src], link[href], a[href]") {
       return extraScripts.concat(page.links || [], page.assets || []);
     }
+    if (selector === "iframe[src], script[src], link[href], a[href]") {
+      return iframes.concat(extraScripts, page.links || [], page.assets || []);
+    }
     return [];
   };
 
@@ -174,12 +178,13 @@ function getFixtureParser(fixture) {
   const fetchConfig = fixture.fetch || fixture.background || {};
   const htmlText = fetchConfig.htmlText || "";
   const parsedJsonLdTexts = fetchConfig.parsedJsonLdTexts || [];
+  const parsedPage = fetchConfig.parsedPage || {};
 
   return class {
     parseFromString(actualHtmlText, type) {
       assert.equal(actualHtmlText, htmlText, fixture.name);
       assert.equal(type, "text/html", fixture.name);
-      return createJsonLdDocument(parsedJsonLdTexts);
+      return createJsonLdDocument(parsedJsonLdTexts, parsedPage);
     }
   };
 }
@@ -195,6 +200,9 @@ function createFixtureChrome(fixture, capture) {
       sendMessage(request, callback) {
         capture.backgroundRequest = request;
         assert.equal(request.type, fixture.background.expectedType, fixture.name);
+        if (fixture.background.expectedJobUrl) {
+          assert.equal(request.jobUrl, fixture.background.expectedJobUrl, fixture.name);
+        }
         callback({
           ok: true,
           htmlText: fixture.background.htmlText

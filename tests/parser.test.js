@@ -653,6 +653,124 @@ test("rejects unsafe or incomplete WAAS YC lookup metadata", () => {
   });
 });
 
+test("detects Ashby lookup requests from embed hints and ashby_jid", () => {
+  const jobId = "0cd9781c-e158-4b0c-9979-04ead270933a";
+  const document = {
+    scripts: [
+      {
+        src: "https://jobs.ashbyhq.com/8090%20Solutions%20Inc/embed?version=2"
+      }
+    ],
+    querySelectorAll(selector) {
+      assert.equal(selector, "iframe[src], script[src], link[href], a[href]");
+      return [];
+    }
+  };
+
+  assert.deepEqual(
+    jobDateLens.getAshbyLookupRequest(
+      document,
+      `https://www.8090.ai/careers?ashby_jid=${jobId}`
+    ),
+    {
+      boardUrl: "https://jobs.ashbyhq.com/8090%20Solutions%20Inc",
+      jobId,
+      jobUrl: `https://jobs.ashbyhq.com/8090%20Solutions%20Inc/${jobId}?embed=js`
+    }
+  );
+});
+
+test("detects Ashby lookup requests from iframe URL hints", () => {
+  const jobId = "0cd9781c-e158-4b0c-9979-04ead270933a";
+  const document = {
+    scripts: [],
+    querySelectorAll(selector) {
+      assert.equal(selector, "iframe[src], script[src], link[href], a[href]");
+      return [
+        {
+          src: `https://jobs.ashbyhq.com/8090%20Solutions%20Inc/${jobId}?embed=js`
+        }
+      ];
+    }
+  };
+
+  assert.deepEqual(
+    jobDateLens.getAshbyLookupRequest(
+      document,
+      `https://www.8090.ai/careers?ashby_jid=${jobId}`
+    ),
+    {
+      boardUrl: "https://jobs.ashbyhq.com/8090%20Solutions%20Inc",
+      jobId,
+      jobUrl: `https://jobs.ashbyhq.com/8090%20Solutions%20Inc/${jobId}?embed=js`
+    }
+  );
+});
+
+test("rejects unsafe or incomplete Ashby lookup requests", () => {
+  const jobId = "0cd9781c-e158-4b0c-9979-04ead270933a";
+  const ashbyDocument = {
+    scripts: [
+      {
+        src: "https://jobs.ashbyhq.com/8090%20Solutions%20Inc/embed?version=2"
+      }
+    ],
+    querySelectorAll() {
+      return [];
+    }
+  };
+  const documents = [
+    {
+      document: ashbyDocument,
+      url: "https://www.8090.ai/careers"
+    },
+    {
+      document: ashbyDocument,
+      url: "https://www.8090.ai/careers?ashby_jid=not-a-uuid"
+    },
+    {
+      document: { scripts: [], querySelectorAll: () => [] },
+      url: `https://www.8090.ai/careers?ashby_jid=${jobId}`
+    },
+    {
+      document: {
+        scripts: [{ src: "http://jobs.ashbyhq.com/8090%20Solutions%20Inc/embed?version=2" }],
+        querySelectorAll: () => []
+      },
+      url: `https://www.8090.ai/careers?ashby_jid=${jobId}`
+    },
+    {
+      document: {
+        scripts: [{ src: "https://example.com/8090%20Solutions%20Inc/embed?version=2" }],
+        querySelectorAll: () => []
+      },
+      url: `https://www.8090.ai/careers?ashby_jid=${jobId}`
+    },
+    {
+      document: {
+        scripts: [{ src: "https://jobs.ashbyhq.com/8090%20Solutions%20Inc" }],
+        querySelectorAll: () => []
+      },
+      url: `https://www.8090.ai/careers?ashby_jid=${jobId}`
+    },
+    {
+      document: {
+        scripts: [{ src: "https://jobs.ashbyhq.com/8090%20Solutions%20Inc/embed/extra" }],
+        querySelectorAll: () => []
+      },
+      url: `https://www.8090.ai/careers?ashby_jid=${jobId}`
+    },
+    {
+      document: ashbyDocument,
+      url: `http://www.8090.ai/careers?ashby_jid=${jobId}`
+    }
+  ];
+
+  documents.forEach((entry) => {
+    assert.equal(jobDateLens.getAshbyLookupRequest(entry.document, entry.url), null);
+  });
+});
+
 test("rejects unsafe or unsupported linked Lever fallback URLs", () => {
   const documents = [
     {

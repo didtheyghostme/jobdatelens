@@ -10,10 +10,12 @@
   var HTML_FETCH_TIMEOUT_MS = 1500;
   var FETCH_HTML_FALLBACK_MESSAGE = "jobdatelens:fetchHtmlFallback";
   var FETCH_YC_JOB_POSTING_MESSAGE = "jobdatelens:fetchYcJobPosting";
+  var FETCH_ASHBY_JOB_POSTING_MESSAGE = "jobdatelens:fetchAshbyJobPosting";
   var HTML_ACCEPT_HEADER =
     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
   var JSON_ACCEPT_HEADER = "application/json";
   var GREENHOUSE_API_ORIGIN = "https://boards-api.greenhouse.io";
+  var ASHBY_JOB_HOSTNAME = "jobs.ashbyhq.com";
   var DATE_SOURCE_ORDER = {
     posted: 10,
     deadline: 20,
@@ -1213,7 +1215,7 @@
   }
 
   function scanHtmlText(htmlText, pageContext, parser) {
-    return scanDocument(parseHtmlDocument(htmlText, parser), pageContext || {});
+    return scanDocument(parseHtmlDocument(htmlText, parser), pageContext);
   }
 
   function snapshotWithoutSelected(snapshot) {
@@ -1380,6 +1382,232 @@
     return {
       jobId: jobId,
       companySlug: companySlug
+    };
+  }
+
+  function getNodeUrl(node) {
+    if (!node) {
+      return "";
+    }
+
+    return (
+      node.src ||
+      node.href ||
+      (typeof node.getAttribute === "function"
+        ? node.getAttribute("src") || node.getAttribute("href")
+        : "")
+    );
+  }
+
+  function normalizeAshbyJobId(value) {
+    var jobId = String(value || "").trim().toLowerCase();
+
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+      jobId
+    )
+      ? jobId
+      : null;
+  }
+
+  function normalizeAshbyBoardPathSegment(value) {
+    var segment = String(value || "").trim();
+
+    if (!segment || segment === "." || segment === "..") {
+      return null;
+    }
+
+    try {
+      return encodeURIComponent(decodeURIComponent(segment));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function getAshbyUrlInfo(value, allowBoardRoot) {
+    var parsed;
+    var pathSegments;
+    var boardSegment;
+    var jobId = null;
+    var baseUrl =
+      typeof window !== "undefined" && window.location
+        ? window.location.href
+        : "https://example.com/";
+
+    try {
+      parsed = new URL(String(value || ""), baseUrl);
+    } catch (error) {
+      return null;
+    }
+
+    if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== ASHBY_JOB_HOSTNAME) {
+      return null;
+    }
+
+    pathSegments = parsed.pathname.split("/").filter(Boolean);
+    boardSegment = normalizeAshbyBoardPathSegment(pathSegments[0]);
+    if (!boardSegment) {
+      return null;
+    }
+
+    if (pathSegments.length === 1 && allowBoardRoot) {
+      return {
+        boardPathSegment: boardSegment,
+        boardUrl: parsed.origin + "/" + boardSegment,
+        jobId: null,
+        jobUrl: ""
+      };
+    }
+
+    if (pathSegments.length !== 2) {
+      return null;
+    }
+
+    if (pathSegments[1] && pathSegments[1] !== "embed") {
+      jobId = normalizeAshbyJobId(pathSegments[1]);
+      if (!jobId) {
+        return null;
+      }
+    }
+
+    return {
+      boardPathSegment: boardSegment,
+      boardUrl: parsed.origin + "/" + boardSegment,
+      jobId: jobId,
+      jobUrl: jobId ? parsed.origin + "/" + boardSegment + "/" + jobId + "?embed=js" : ""
+    };
+  }
+
+  function getAshbyBoardUrlFromUrl(value) {
+    var info = getAshbyUrlInfo(value);
+
+    return info ? info.boardUrl : null;
+  }
+
+  function getAshbyBoardUrlFromDocument(doc) {
+    var nodes = [];
+    var boardUrl = null;
+
+    if (!doc) {
+      return null;
+    }
+
+    if (doc.scripts) {
+      nodes = nodes.concat(Array.prototype.slice.call(doc.scripts || []));
+    }
+    if (typeof doc.querySelectorAll === "function") {
+      nodes = nodes.concat(
+        Array.prototype.slice.call(
+          doc.querySelectorAll("iframe[src], script[src], link[href], a[href]") || []
+        )
+      );
+    }
+
+    nodes.some(function (node) {
+      boardUrl = getAshbyBoardUrlFromUrl(getNodeUrl(node));
+      return Boolean(boardUrl);
+    });
+
+    return boardUrl;
+  }
+
+  function getAshbyJobIdFromUrl(parsed) {
+    return normalizeAshbyJobId(parsed.searchParams.get("ashby_jid"));
+  }
+
+  function getAshbyJobPostingUrl(boardUrl, jobId) {
+    var info = getAshbyUrlInfo(boardUrl, true);
+    var id = normalizeAshbyJobId(jobId);
+
+    if (!info || !id) {
+      return null;
+    }
+
+    return info.boardUrl + "/" + id + "?embed=js";
+  }
+
+  function getAshbyLookupRequest(doc, pageUrl) {
+    var parsed;
+    var boardUrl;
+    var jobId;
+    var jobUrl;
+
+    try {
+      parsed = new URL(String(pageUrl || ""));
+    } catch (error) {
+      return null;
+    }
+
+    if (parsed.protocol !== "https:") {
+      return null;
+    }
+
+    jobId = getAshbyJobIdFromUrl(parsed);
+    boardUrl = getAshbyBoardUrlFromDocument(doc);
+    jobUrl = getAshbyJobPostingUrl(boardUrl, jobId);
+
+    return jobUrl
+      ? {
+          boardUrl: boardUrl,
+          jobId: jobId,
+          jobUrl: jobUrl
+        }
+      : null;
+  }
+
+  function getAshbyLookupDebugInfo(doc, pageUrl) {
+    var request = getAshbyLookupRequest(doc, pageUrl);
+    var parsed;
+    var boardUrl = "";
+    var jobId = "";
+    var reason = "";
+
+    if (request) {
+      return {
+        request: request,
+        lookup: {
+          boardUrl: request.boardUrl,
+          jobId: request.jobId,
+          jobUrl: request.jobUrl
+        },
+        skipReason: ""
+      };
+    }
+
+    try {
+      parsed = new URL(String(pageUrl || ""));
+    } catch (error) {
+      return {
+        request: null,
+        lookup: {},
+        skipReason: "invalid-url"
+      };
+    }
+
+    if (parsed.protocol !== "https:") {
+      return {
+        request: null,
+        lookup: {},
+        skipReason: "unsupported-url"
+      };
+    }
+
+    jobId = getAshbyJobIdFromUrl(parsed) || "";
+    boardUrl = getAshbyBoardUrlFromDocument(doc) || "";
+    if (!jobId) {
+      reason = "missing-job-id";
+    } else if (!boardUrl) {
+      reason = "missing-board-url";
+    } else {
+      reason = "invalid-lookup";
+    }
+
+    return {
+      request: null,
+      lookup: {
+        boardUrl: boardUrl,
+        jobId: jobId
+      },
+      skipReason: reason
     };
   }
 
@@ -2071,6 +2299,73 @@
       });
     }
 
+    function fetchAshbyJobPostingFallbackHtml(lookupRequest) {
+      var timeoutId;
+
+      return new Promise(function (resolve, reject) {
+        var settled = false;
+
+        function finish(callback) {
+          return function (value) {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            window.clearTimeout(timeoutId);
+            callback(value);
+          };
+        }
+
+        var resolveOnce = finish(resolve);
+        var rejectOnce = finish(reject);
+
+        timeoutId = window.setTimeout(function () {
+          rejectOnce(new Error("Timed out after " + HTML_FETCH_TIMEOUT_MS + "ms."));
+        }, HTML_FETCH_TIMEOUT_MS);
+
+        if (
+          typeof chrome === "undefined" ||
+          !chrome.runtime ||
+          typeof chrome.runtime.sendMessage !== "function"
+        ) {
+          rejectOnce(new Error("Background Ashby job fetch is not available."));
+          return;
+        }
+
+        try {
+          chrome.runtime.sendMessage(
+            {
+              type: FETCH_ASHBY_JOB_POSTING_MESSAGE,
+              jobUrl: lookupRequest.jobUrl
+            },
+            function (response) {
+              var lastError = chrome.runtime && chrome.runtime.lastError;
+
+              if (lastError) {
+                rejectOnce(new Error(lastError.message || "Background Ashby job fetch failed."));
+                return;
+              }
+
+              if (!response || !response.ok) {
+                rejectOnce(
+                  new Error(
+                    response && response.message
+                      ? response.message
+                      : "Background Ashby job fetch failed."
+                  )
+                );
+                return;
+              }
+
+              resolveOnce(response.htmlText || "");
+            }
+          );
+        } catch (error) {
+          rejectOnce(error);
+        }
+      });
+    }
+
     function fetchGreenhouseJobPosting(lookupRequest) {
       var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
       var options = {
@@ -2134,6 +2429,8 @@
       var linkedFallbackUrl;
       var ycLookupRequest;
       var ycLookupDebug;
+      var ashbyLookupRequest;
+      var ashbyLookupDebug;
       var greenhouseLookupDebug;
       var greenhouseLookupRequest;
       var greenhouseJson;
@@ -2280,6 +2577,92 @@
           status: "skipped",
           reason: greenhouseLookupDebug.skipReason || "no-lookup-request",
           lookup: greenhouseLookupDebug.lookup
+        });
+      }
+
+      ashbyLookupDebug = getAshbyLookupDebugInfo(document, pageUrl);
+      ashbyLookupRequest = ashbyLookupDebug.request;
+      if (ashbyLookupRequest) {
+        try {
+          htmlText = await fetchAshbyJobPostingFallbackHtml(ashbyLookupRequest);
+          if (scanId !== activeScanId) {
+            addDebugAttempt(debug, {
+              source: "ashby-jsonld",
+              status: "superseded",
+              reason: "scan-superseded",
+              lookup: ashbyLookupDebug.lookup
+            });
+            return summarizeScan(null, "ashby-jsonld", "scan-superseded", debug);
+          }
+          if (window.location.href !== pageUrl) {
+            removeNotice();
+            addDebugAttempt(debug, {
+              source: "ashby-jsonld",
+              status: "superseded",
+              reason: "scan-superseded",
+              lookup: ashbyLookupDebug.lookup
+            });
+            return summarizeScan(null, "ashby-jsonld", "scan-superseded", debug);
+          }
+
+          htmlSnapshot = scanHtmlText(htmlText, null);
+          if (htmlSnapshot.result.selected) {
+            addDebugAttempt(debug, {
+              source: "ashby-jsonld",
+              status: "selected",
+              snapshot: htmlSnapshot,
+              lookup: ashbyLookupDebug.lookup
+            });
+            renderBadge(htmlSnapshot.result);
+            return summarizeScan(htmlSnapshot, "ashby-jsonld", "", debug);
+          }
+
+          addDebugAttempt(debug, {
+            source: "ashby-jsonld",
+            status: "no-match",
+            reason: "ashby-jsonld-no-match",
+            snapshot: htmlSnapshot,
+            lookup: ashbyLookupDebug.lookup
+          });
+          removeBadge();
+          notice = getHtmlFallbackNoResultNotice();
+          showNotice(notice.message, notice.helper, { persistent: true });
+          return summarizeScan(htmlSnapshot, "ashby-jsonld", "ashby-jsonld-no-match", debug);
+        } catch (error) {
+          if (scanId !== activeScanId) {
+            addDebugAttempt(debug, {
+              source: "ashby-jsonld",
+              status: "superseded",
+              reason: "scan-superseded",
+              lookup: ashbyLookupDebug.lookup
+            });
+            return summarizeScan(null, "ashby-jsonld", "scan-superseded", debug);
+          }
+          if (window.location.href !== pageUrl) {
+            removeNotice();
+            addDebugAttempt(debug, {
+              source: "ashby-jsonld",
+              status: "superseded",
+              reason: "scan-superseded",
+              lookup: ashbyLookupDebug.lookup
+            });
+            return summarizeScan(null, "ashby-jsonld", "scan-superseded", debug);
+          }
+
+          addDebugAttempt(debug, {
+            source: "ashby-jsonld",
+            status: "failed",
+            reason: "fetch-failed",
+            lookup: ashbyLookupDebug.lookup,
+            error: error
+          });
+        }
+      } else {
+        addDebugAttempt(debug, {
+          source: "ashby-jsonld",
+          status: "skipped",
+          reason: ashbyLookupDebug.skipReason || "no-lookup-request",
+          lookup: ashbyLookupDebug.lookup
         });
       }
 
@@ -2493,6 +2876,9 @@
     getGreenhouseApiUrl: getGreenhouseApiUrl,
     getGreenhouseBoardTokenFromDocument: getGreenhouseBoardTokenFromDocument,
     getGreenhouseLookupRequest: getGreenhouseLookupRequest,
+    getAshbyBoardUrlFromDocument: getAshbyBoardUrlFromDocument,
+    getAshbyJobPostingUrl: getAshbyJobPostingUrl,
+    getAshbyLookupRequest: getAshbyLookupRequest,
     getCanonicalLeverPostingUrl: getCanonicalLeverPostingUrl,
     getHtmlFallbackUrl: getHtmlFallbackUrl,
     getLinkedLeverFallbackUrl: getLinkedLeverFallbackUrl,

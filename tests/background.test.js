@@ -144,6 +144,105 @@ test("rejects unsupported background fallback URLs without fetching", async () =
   });
 });
 
+test("canonicalizes only supported Ashby job posting URLs", () => {
+  const jobId = "0cd9781c-e158-4b0c-9979-04ead270933a";
+  const canonicalUrl = `https://jobs.ashbyhq.com/8090%20Solutions%20Inc/${jobId}?embed=js`;
+
+  assert.equal(
+    background.getCanonicalAshbyJobPostingUrl(
+      `https://jobs.ashbyhq.com/8090%20Solutions%20Inc/${jobId}`
+    ),
+    canonicalUrl
+  );
+  assert.equal(
+    background.getCanonicalAshbyJobPostingUrl(`${canonicalUrl}&utm_source=test`),
+    canonicalUrl
+  );
+  assert.equal(
+    background.getCanonicalAshbyJobPostingUrl(
+      `https://jobs.ashbyhq.com/8090%20Solutions%20Inc/embed?version=2`
+    ),
+    null
+  );
+  assert.equal(
+    background.getCanonicalAshbyJobPostingUrl(
+      `https://jobs.ashbyhq.com/8090%20Solutions%20Inc/not-a-uuid`
+    ),
+    null
+  );
+  assert.equal(
+    background.getCanonicalAshbyJobPostingUrl(
+      `https://jobs.ashbyhq.com.evil.com/8090%20Solutions%20Inc/${jobId}`
+    ),
+    null
+  );
+  assert.equal(
+    background.getCanonicalAshbyJobPostingUrl(
+      `http://jobs.ashbyhq.com/8090%20Solutions%20Inc/${jobId}`
+    ),
+    null
+  );
+});
+
+test("fetches validated Ashby job HTML through the background handler", async () => {
+  const jobId = "0cd9781c-e158-4b0c-9979-04ead270933a";
+  const jobUrl = `https://jobs.ashbyhq.com/8090%20Solutions%20Inc/${jobId}?embed=js`;
+  let fetchedUrl = "";
+  let fetchOptions = null;
+
+  const response = await background.handleFetchAshbyJobPostingMessage(
+    {
+      type: background.FETCH_ASHBY_JOB_POSTING_MESSAGE,
+      jobUrl: `${jobUrl}&ignored=1`
+    },
+    async (url, options) => {
+      fetchedUrl = url;
+      fetchOptions = options;
+      return {
+        ok: true,
+        text: async () => "<!doctype html><script></script>"
+      };
+    }
+  );
+
+  assert.equal(fetchedUrl, jobUrl);
+  assert.deepEqual(fetchOptions, {
+    cache: "no-store",
+    credentials: "omit",
+    headers: {
+      Accept: background.HTML_ACCEPT_HEADER
+    }
+  });
+  assert.deepEqual(response, {
+    ok: true,
+    htmlText: "<!doctype html><script></script>",
+    url: jobUrl
+  });
+});
+
+test("rejects unsupported Ashby lookup URLs without fetching", async () => {
+  let fetchCalled = false;
+  const response = await background.handleFetchAshbyJobPostingMessage(
+    {
+      type: background.FETCH_ASHBY_JOB_POSTING_MESSAGE,
+      jobUrl: "https://example.com/8090/0cd9781c-e158-4b0c-9979-04ead270933a"
+    },
+    async () => {
+      fetchCalled = true;
+      return {
+        ok: true,
+        text: async () => ""
+      };
+    }
+  );
+
+  assert.equal(fetchCalled, false);
+  assert.deepEqual(response, {
+    ok: false,
+    message: "Unsupported Ashby job lookup."
+  });
+});
+
 test("extracts a YC job URL only when the WAAS job id matches exactly", () => {
   const companyHtml = `
     <script>

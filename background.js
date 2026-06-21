@@ -8,9 +8,11 @@ var SHORTCUT_WARNING_BADGE_TEXT = "!";
 var SHORTCUT_WARNING_BADGE_COLOR = "#D97706";
 var FETCH_HTML_FALLBACK_MESSAGE = "jobdatelens:fetchHtmlFallback";
 var FETCH_YC_JOB_POSTING_MESSAGE = "jobdatelens:fetchYcJobPosting";
+var FETCH_ASHBY_JOB_POSTING_MESSAGE = "jobdatelens:fetchAshbyJobPosting";
 var HTML_ACCEPT_HEADER =
   "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 var YC_ORIGIN = "https://www.ycombinator.com";
+var ASHBY_JOB_HOSTNAME = "jobs.ashbyhq.com";
 
 function isSupportedPageUrl(url) {
   return typeof url === "string" && /^https?:\/\//i.test(url);
@@ -39,6 +41,60 @@ function getCanonicalLeverPostingUrl(value) {
   }
 
   return null;
+}
+
+function normalizeAshbyJobId(value) {
+  var jobId = String(value || "").trim().toLowerCase();
+
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+    jobId
+  )
+    ? jobId
+    : null;
+}
+
+function normalizeAshbyBoardPathSegment(value) {
+  var segment = String(value || "").trim();
+
+  if (!segment || segment === "." || segment === "..") {
+    return null;
+  }
+
+  try {
+    return encodeURIComponent(decodeURIComponent(segment));
+  } catch (error) {
+    return null;
+  }
+}
+
+function getCanonicalAshbyJobPostingUrl(value) {
+  var parsed;
+  var pathSegments;
+  var boardSegment;
+  var jobId;
+
+  try {
+    parsed = new URL(String(value || ""));
+  } catch (error) {
+    return null;
+  }
+
+  if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== ASHBY_JOB_HOSTNAME) {
+    return null;
+  }
+
+  pathSegments = parsed.pathname.split("/").filter(Boolean);
+  if (pathSegments.length !== 2) {
+    return null;
+  }
+
+  boardSegment = normalizeAshbyBoardPathSegment(pathSegments[0]);
+  jobId = normalizeAshbyJobId(pathSegments[1]);
+  if (!boardSegment || !jobId) {
+    return null;
+  }
+
+  return parsed.origin + "/" + boardSegment + "/" + jobId + "?embed=js";
 }
 
 function escapeRegExp(value) {
@@ -405,6 +461,51 @@ async function handleFetchYcJobPostingMessage(request, fetchImpl) {
   }
 }
 
+async function handleFetchAshbyJobPostingMessage(request, fetchImpl) {
+  var jobUrl = getCanonicalAshbyJobPostingUrl(request && request.jobUrl);
+  var fetcher;
+  var response;
+  var htmlText;
+
+  if (!jobUrl) {
+    return {
+      ok: false,
+      message: "Unsupported Ashby job lookup."
+    };
+  }
+
+  fetcher = fetchImpl || fetch;
+
+  try {
+    response = await fetcher(jobUrl, {
+      cache: "no-store",
+      credentials: "omit",
+      headers: {
+        Accept: HTML_ACCEPT_HEADER
+      }
+    });
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message: "HTTP " + response.status
+      };
+    }
+
+    htmlText = await response.text();
+    return {
+      ok: true,
+      htmlText: htmlText,
+      url: jobUrl
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error && error.message ? error.message : String(error)
+    };
+  }
+}
+
 function handleRuntimeMessage(request, sender, sendResponse) {
   if (!request) {
     return false;
@@ -417,6 +518,11 @@ function handleRuntimeMessage(request, sender, sendResponse) {
 
   if (request.type === FETCH_YC_JOB_POSTING_MESSAGE) {
     handleFetchYcJobPostingMessage(request).then(sendResponse);
+    return true;
+  }
+
+  if (request.type === FETCH_ASHBY_JOB_POSTING_MESSAGE) {
+    handleFetchAshbyJobPostingMessage(request).then(sendResponse);
     return true;
   }
 
@@ -438,14 +544,17 @@ if (typeof chrome !== "undefined" && chrome.action && chrome.action.onClicked) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     EXECUTE_ACTION_COMMAND: EXECUTE_ACTION_COMMAND,
+    FETCH_ASHBY_JOB_POSTING_MESSAGE: FETCH_ASHBY_JOB_POSTING_MESSAGE,
     FETCH_HTML_FALLBACK_MESSAGE: FETCH_HTML_FALLBACK_MESSAGE,
     FETCH_YC_JOB_POSTING_MESSAGE: FETCH_YC_JOB_POSTING_MESSAGE,
     HTML_ACCEPT_HEADER: HTML_ACCEPT_HEADER,
     decodeHtmlEntities: decodeHtmlEntities,
     extractYcJobPostingUrlFromCompanyHtml: extractYcJobPostingUrlFromCompanyHtml,
+    getCanonicalAshbyJobPostingUrl: getCanonicalAshbyJobPostingUrl,
     getCanonicalLeverPostingUrl: getCanonicalLeverPostingUrl,
     getCommandByName: getCommandByName,
     getYcCompanyUrl: getYcCompanyUrl,
+    handleFetchAshbyJobPostingMessage: handleFetchAshbyJobPostingMessage,
     handleFetchHtmlFallbackMessage: handleFetchHtmlFallbackMessage,
     handleFetchYcJobPostingMessage: handleFetchYcJobPostingMessage,
     handleRuntimeMessage: handleRuntimeMessage,
