@@ -229,6 +229,43 @@ const browserFixtures = [
     }
   },
   {
+    name: "Greenhouse custom page with apply link",
+    url: "https://www.drw.com/work-at-drw/listings/software-developer-intern-c-3474902",
+    page: {
+      title: "Software Developer Intern (C++) | DRW",
+      heading: "Software Developer Intern (C++)",
+      visibleText: "Work at DRW Software Developer Intern (C++) Singapore Intern Campus",
+      links: [
+        { href: "https://job-boards.greenhouse.io/drweng/jobs/8014910" },
+        { href: "https://job-boards.greenhouse.io/drweng/jobs/8014910" }
+      ]
+    },
+    fetch: {
+      expectedUrl: "https://boards-api.greenhouse.io/v1/boards/drweng/jobs/8014910",
+      json: {
+        title: "Software Developer Intern (C++)",
+        company_name: "DRW",
+        first_published: "2026-07-13T02:23:22-04:00",
+        updated_at: "2026-07-13T02:23:22-04:00",
+        application_deadline: null
+      }
+    },
+    expected: {
+      found: true,
+      source: "greenhouse-api",
+      selectedSource: "greenhouse-api",
+      attempts: [
+        ["dom-jsonld", "no-match"],
+        ["greenhouse-api", "selected"]
+      ],
+      dateRows: [
+        ["posted", "valid"],
+        ["deadline", "missing"],
+        ["updated", "valid"]
+      ]
+    }
+  },
+  {
     name: "Greenhouse custom page without board token",
     url: "https://www.mongodb.com/careers/jobs/7851388",
     page: {

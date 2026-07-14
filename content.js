@@ -1640,9 +1640,12 @@
     );
   }
 
-  function getGreenhouseTokenFromUrl(value) {
+  function getGreenhouseLookupFromUrl(value) {
     var parsed;
-    var token;
+    var hostname;
+    var pathSegments;
+    var boardToken;
+    var jobId;
     var baseUrl =
       typeof window !== "undefined" && window.location
         ? window.location.href
@@ -1654,19 +1657,49 @@
       return null;
     }
 
-    if (parsed.hostname.toLowerCase() === "job-boards.greenhouse.io") {
-      token = parsed.pathname.split("/").filter(Boolean)[0];
-      return normalizeGreenhouseBoardToken(token);
+    hostname = parsed.hostname.toLowerCase();
+    if (hostname !== "job-boards.greenhouse.io" && hostname !== "boards.greenhouse.io") {
+      return null;
     }
 
-    if (
-      parsed.hostname.toLowerCase() === "boards.greenhouse.io" &&
-      parsed.pathname.indexOf("/embed/job_board") === 0
-    ) {
-      return normalizeGreenhouseBoardToken(parsed.searchParams.get("for"));
+    pathSegments = parsed.pathname.split("/").filter(Boolean);
+
+    if (pathSegments[0] === "embed") {
+      boardToken = normalizeGreenhouseBoardToken(parsed.searchParams.get("for"));
+      if (!boardToken) {
+        return null;
+      }
+      if (pathSegments[1] === "job_app") {
+        return {
+          boardToken: boardToken,
+          jobId: normalizeGreenhouseJobId(parsed.searchParams.get("token"))
+        };
+      }
+      if (pathSegments[1] === "job_board") {
+        return { boardToken: boardToken, jobId: null };
+      }
+      return null;
     }
 
-    return null;
+    boardToken = normalizeGreenhouseBoardToken(pathSegments[0]);
+    if (!boardToken) {
+      return null;
+    }
+    jobId = pathSegments[1] === "jobs" ? normalizeGreenhouseJobId(pathSegments[2]) : null;
+
+    // Plain boards.greenhouse.io links (board roots, section pages) are not
+    // treated as token hints; only embed URLs and full posting URLs are.
+    if (hostname === "boards.greenhouse.io" && !jobId) {
+      return null;
+    }
+
+    return { boardToken: boardToken, jobId: jobId };
+  }
+
+  function getGreenhouseTokenFromUrl(value) {
+    var lookup = getGreenhouseLookupFromUrl(value);
+
+    return lookup ? lookup.boardToken : null;
   }
 
   function getGreenhouseNodeUrl(node) {
@@ -1683,12 +1716,11 @@
     );
   }
 
-  function getGreenhouseBoardTokenFromDocument(doc) {
+  function getGreenhouseDocumentNodes(doc) {
     var nodes = [];
-    var token = null;
 
     if (!doc) {
-      return null;
+      return nodes;
     }
 
     if (doc.scripts) {
@@ -1700,12 +1732,52 @@
       );
     }
 
-    nodes.some(function (node) {
+    return nodes;
+  }
+
+  function getGreenhouseBoardTokenFromDocument(doc) {
+    var token = null;
+
+    getGreenhouseDocumentNodes(doc).some(function (node) {
       token = getGreenhouseTokenFromUrl(getGreenhouseNodeUrl(node));
       return Boolean(token);
     });
 
     return token;
+  }
+
+  function getGreenhouseLookupFromDocument(doc) {
+    var countsByKey = {};
+    var pairsByKey = {};
+    var orderedKeys = [];
+    var bestKey = null;
+
+    getGreenhouseDocumentNodes(doc).forEach(function (node) {
+      var lookup = getGreenhouseLookupFromUrl(getGreenhouseNodeUrl(node));
+      var key;
+
+      if (!lookup || !lookup.boardToken || !lookup.jobId) {
+        return;
+      }
+
+      key = lookup.boardToken + "/" + lookup.jobId;
+      if (!Object.prototype.hasOwnProperty.call(countsByKey, key)) {
+        countsByKey[key] = 0;
+        pairsByKey[key] = lookup;
+        orderedKeys.push(key);
+      }
+      countsByKey[key] += 1;
+    });
+
+    // Prefer the most linked posting; ties fall back to first occurrence so a
+    // single "related roles" link cannot outrank the page's own apply links.
+    orderedKeys.forEach(function (key) {
+      if (bestKey === null || countsByKey[key] > countsByKey[bestKey]) {
+        bestKey = key;
+      }
+    });
+
+    return bestKey === null ? null : pairsByKey[bestKey];
   }
 
   function getGreenhouseJobIdFromUrl(parsed) {
@@ -1731,6 +1803,7 @@
     var parsed;
     var hostname;
     var pathSegments;
+    var documentLookup;
     var boardToken = null;
     var jobId = null;
     var apiUrl;
@@ -1760,8 +1833,16 @@
       }
     } else {
       jobId = getGreenhouseJobIdFromUrl(parsed);
+      documentLookup = getGreenhouseLookupFromDocument(doc);
       if (jobId) {
-        boardToken = getGreenhouseBoardTokenFromDocument(doc);
+        if (documentLookup && documentLookup.jobId === jobId) {
+          boardToken = documentLookup.boardToken;
+        } else {
+          boardToken = getGreenhouseBoardTokenFromDocument(doc);
+        }
+      } else if (documentLookup) {
+        boardToken = documentLookup.boardToken;
+        jobId = documentLookup.jobId;
       }
     }
 
@@ -1783,6 +1864,7 @@
     var parsed;
     var hostname;
     var pathSegments;
+    var documentLookup;
     var boardToken = "";
     var jobId = "";
     var reason = "";
@@ -1825,8 +1907,16 @@
         pathSegments[1] === "jobs" ? normalizeGreenhouseJobId(pathSegments[2]) || "" : "";
     } else {
       jobId = getGreenhouseJobIdFromUrl(parsed) || "";
+      documentLookup = getGreenhouseLookupFromDocument(doc);
       if (jobId) {
-        boardToken = getGreenhouseBoardTokenFromDocument(doc) || "";
+        if (documentLookup && documentLookup.jobId === jobId) {
+          boardToken = documentLookup.boardToken || "";
+        } else {
+          boardToken = getGreenhouseBoardTokenFromDocument(doc) || "";
+        }
+      } else if (documentLookup) {
+        boardToken = documentLookup.boardToken || "";
+        jobId = documentLookup.jobId || "";
       }
     }
 
@@ -2871,6 +2961,8 @@
     scanGreenhouseJobPosting: scanGreenhouseJobPosting,
     getGreenhouseApiUrl: getGreenhouseApiUrl,
     getGreenhouseBoardTokenFromDocument: getGreenhouseBoardTokenFromDocument,
+    getGreenhouseLookupFromUrl: getGreenhouseLookupFromUrl,
+    getGreenhouseLookupFromDocument: getGreenhouseLookupFromDocument,
     getGreenhouseLookupRequest: getGreenhouseLookupRequest,
     getAshbyBoardUrlFromDocument: getAshbyBoardUrlFromDocument,
     getAshbyJobPostingUrl: getAshbyJobPostingUrl,

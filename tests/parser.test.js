@@ -883,6 +883,111 @@ test("does not guess Greenhouse board tokens for custom pages without embed hint
   );
 });
 
+test("parses Greenhouse lookup pairs from posting and embed URLs", () => {
+  assert.deepEqual(
+    jobDateLens.getGreenhouseLookupFromUrl(
+      "https://job-boards.greenhouse.io/drweng/jobs/8014910?gh_src=abc123"
+    ),
+    { boardToken: "drweng", jobId: "8014910" }
+  );
+  assert.deepEqual(
+    jobDateLens.getGreenhouseLookupFromUrl(
+      "https://boards.greenhouse.io/acme/jobs/123456"
+    ),
+    { boardToken: "acme", jobId: "123456" }
+  );
+  assert.deepEqual(
+    jobDateLens.getGreenhouseLookupFromUrl(
+      "https://boards.greenhouse.io/embed/job_app?for=acme&token=123456"
+    ),
+    { boardToken: "acme", jobId: "123456" }
+  );
+  assert.deepEqual(
+    jobDateLens.getGreenhouseLookupFromUrl(
+      "https://boards.greenhouse.io/embed/job_board/js?for=mongodb"
+    ),
+    { boardToken: "mongodb", jobId: null }
+  );
+  assert.deepEqual(
+    jobDateLens.getGreenhouseLookupFromUrl("https://job-boards.greenhouse.io/drweng"),
+    { boardToken: "drweng", jobId: null }
+  );
+  assert.equal(
+    jobDateLens.getGreenhouseLookupFromUrl("https://boards.greenhouse.io/acme"),
+    null
+  );
+  assert.equal(
+    jobDateLens.getGreenhouseLookupFromUrl("https://example.com/acme/jobs/123456"),
+    null
+  );
+});
+
+test("detects custom Greenhouse API lookup requests from apply links", () => {
+  const drwDocument = {
+    scripts: [],
+    querySelectorAll(selector) {
+      assert.equal(selector, "script[src], link[href], a[href]");
+      return [
+        { href: "https://job-boards.greenhouse.io/drweng/jobs/8014910" },
+        { href: "https://job-boards.greenhouse.io/drweng/jobs/8014910" }
+      ];
+    }
+  };
+
+  assert.deepEqual(
+    jobDateLens.getGreenhouseLookupRequest(
+      drwDocument,
+      "https://www.drw.com/work-at-drw/listings/software-developer-intern-c-3474902"
+    ),
+    {
+      boardToken: "drweng",
+      jobId: "8014910",
+      apiUrl: "https://boards-api.greenhouse.io/v1/boards/drweng/jobs/8014910"
+    }
+  );
+});
+
+test("prefers the most linked Greenhouse posting when pages link several", () => {
+  const document = {
+    scripts: [],
+    querySelectorAll: () => [
+      { href: "https://job-boards.greenhouse.io/acme/jobs/111" },
+      { href: "https://job-boards.greenhouse.io/acme/jobs/222" },
+      { href: "https://job-boards.greenhouse.io/acme/jobs/111" }
+    ]
+  };
+
+  assert.deepEqual(jobDateLens.getGreenhouseLookupFromDocument(document), {
+    boardToken: "acme",
+    jobId: "111"
+  });
+});
+
+test("keeps URL job ids authoritative over mismatched apply links", () => {
+  const document = {
+    scripts: [
+      {
+        src: "https://boards.greenhouse.io/embed/job_board/js?for=ripple"
+      }
+    ],
+    querySelectorAll: () => [
+      { href: "https://job-boards.greenhouse.io/ripple/jobs/999" }
+    ]
+  };
+
+  assert.deepEqual(
+    jobDateLens.getGreenhouseLookupRequest(
+      document,
+      "https://ripple.com/careers/all-jobs/job/7724653/?gh_jid=7724653"
+    ),
+    {
+      boardToken: "ripple",
+      jobId: "7724653",
+      apiUrl: "https://boards-api.greenhouse.io/v1/boards/ripple/jobs/7724653"
+    }
+  );
+});
+
 test("rejects unsafe Greenhouse lookup URLs", () => {
   assert.equal(
     jobDateLens.getGreenhouseLookupRequest(
