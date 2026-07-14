@@ -829,7 +829,7 @@ test("detects custom Greenhouse API lookup requests from embed hints", () => {
   const rippleDocument = {
     scripts: [],
     querySelectorAll(selector) {
-      assert.equal(selector, "script[src], link[href], a[href]");
+      assert.equal(selector, "iframe[src], script[src], link[href], a[href]");
       return [
         {
           href: "https://boards.greenhouse.io/embed/job_board/js?for=ripple"
@@ -844,7 +844,7 @@ test("detects custom Greenhouse API lookup requests from embed hints", () => {
       }
     ],
     querySelectorAll(selector) {
-      assert.equal(selector, "script[src], link[href], a[href]");
+      assert.equal(selector, "iframe[src], script[src], link[href], a[href]");
       return [];
     }
   };
@@ -926,7 +926,7 @@ test("detects custom Greenhouse API lookup requests from apply links", () => {
   const drwDocument = {
     scripts: [],
     querySelectorAll(selector) {
-      assert.equal(selector, "script[src], link[href], a[href]");
+      assert.equal(selector, "iframe[src], script[src], link[href], a[href]");
       return [
         { href: "https://job-boards.greenhouse.io/drweng/jobs/8014910" },
         { href: "https://job-boards.greenhouse.io/drweng/jobs/8014910" }
@@ -943,6 +943,32 @@ test("detects custom Greenhouse API lookup requests from apply links", () => {
       boardToken: "drweng",
       jobId: "8014910",
       apiUrl: "https://boards-api.greenhouse.io/v1/boards/drweng/jobs/8014910"
+    }
+  );
+});
+
+test("detects custom Greenhouse API lookup requests from job_app iframes", () => {
+  const hrtDocument = {
+    scripts: [],
+    querySelectorAll(selector) {
+      assert.equal(selector, "iframe[src], script[src], link[href], a[href]");
+      return [
+        {
+          src: "https://job-boards.greenhouse.io/embed/job_app?for=wehrtyou&token=8052083"
+        }
+      ];
+    }
+  };
+
+  assert.deepEqual(
+    jobDateLens.getGreenhouseLookupRequest(
+      hrtDocument,
+      "https://www.hudsonrivertrading.com/hrt-job/software-engineering-internship-c-or-python-summer-2027/"
+    ),
+    {
+      boardToken: "wehrtyou",
+      jobId: "8052083",
+      apiUrl: "https://boards-api.greenhouse.io/v1/boards/wehrtyou/jobs/8052083"
     }
   );
 });

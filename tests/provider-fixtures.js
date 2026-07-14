@@ -266,6 +266,47 @@ const browserFixtures = [
     }
   },
   {
+    name: "Greenhouse custom page with job_app iframe",
+    url:
+      "https://www.hudsonrivertrading.com/hrt-job/software-engineering-internship-c-or-python-summer-2027/",
+    page: {
+      title:
+        "Software Engineering Internship (C++ or Python) – Summer 2027 | Hudson River Trading",
+      heading: "Software Engineering Internship (C++ or Python) – Summer 2027",
+      visibleText:
+        "About This Role Austin Chicago New York Singapore C++ Python Intern Software Engineering Internship",
+      iframes: [
+        {
+          src: "https://job-boards.greenhouse.io/embed/job_app?for=wehrtyou&token=8052083"
+        }
+      ]
+    },
+    fetch: {
+      expectedUrl: "https://boards-api.greenhouse.io/v1/boards/wehrtyou/jobs/8052083",
+      json: {
+        title: "Software Engineering Internship (C++ or Python) – Summer 2027",
+        company_name: "Hudson River Trading",
+        first_published: "2026-07-13T11:35:06-04:00",
+        updated_at: "2026-07-13T17:48:50-04:00",
+        application_deadline: null
+      }
+    },
+    expected: {
+      found: true,
+      source: "greenhouse-api",
+      selectedSource: "greenhouse-api",
+      attempts: [
+        ["dom-jsonld", "no-match"],
+        ["greenhouse-api", "selected"]
+      ],
+      dateRows: [
+        ["posted", "valid"],
+        ["deadline", "missing"],
+        ["updated", "valid"]
+      ]
+    }
+  },
+  {
     name: "Greenhouse custom page without board token",
     url: "https://www.mongodb.com/careers/jobs/7851388",
     page: {

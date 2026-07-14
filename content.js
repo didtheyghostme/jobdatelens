@@ -1728,7 +1728,9 @@
     }
     if (typeof doc.querySelectorAll === "function") {
       nodes = nodes.concat(
-        Array.prototype.slice.call(doc.querySelectorAll("script[src], link[href], a[href]") || [])
+        Array.prototype.slice.call(
+          doc.querySelectorAll("iframe[src], script[src], link[href], a[href]") || []
+        )
       );
     }
 

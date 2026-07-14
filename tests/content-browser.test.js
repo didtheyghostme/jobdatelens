@@ -541,7 +541,7 @@ test("scanOnce finds Greenhouse board token from custom page embed hints", async
     return null;
   };
   document.querySelectorAll = (selector) => {
-    if (selector === "script[src], link[href], a[href]") {
+    if (selector === "iframe[src], script[src], link[href], a[href]") {
       return [
         {
           href: "https://boards.greenhouse.io/embed/job_board/js?for=ripple"
