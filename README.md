@@ -38,9 +38,11 @@ JobDateLens does not call a JobDateLens backend, send data to a private service,
 | Ashby | Page JSON-LD, including embedded public Ashby job-page fallback | Same `schema.org JobPosting` fields |
 | YC / Work at a Startup | Derived YC job page JSON-LD fallback | Same `schema.org JobPosting` fields |
 
+Many job sites publish machine-readable dates using the [Schema.org `JobPosting`](https://schema.org/JobPosting) format. Google uses the same format for its [job posting search features](https://developers.google.com/search/docs/appearance/structured-data/job-posting). JobDateLens reads the available dates directly from the page.
+
 Only public job-page or public job-board API fields are used. Authenticated employer APIs such as Greenhouse Harvest or private Ashby APIs are out of scope.
 
-## Testt
+## Test
 
 Run the automated tests with Node:
 
