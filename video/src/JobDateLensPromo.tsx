@@ -6,6 +6,7 @@ import {
   Img,
   Sequence,
   interpolate,
+  interpolateColors,
   staticFile,
   useCurrentFrame,
 } from "remotion";
@@ -45,6 +46,16 @@ const dateFields = [
 const FIELD_HIGHLIGHTS_START_FRAME = 198;
 const FIELD_HIGHLIGHT_STAGGER_IN_FRAMES = 18;
 const FIELD_HIGHLIGHT_ENTER_IN_FRAMES = 12;
+
+const shortcutKeys = [
+  {label: "⌘", pressStartFrame: 28, width: 72},
+  {label: "⇧", pressStartFrame: 33, width: 72},
+  {label: "E", pressStartFrame: 38, width: 64},
+] as const;
+
+const SHORTCUT_PRESS_IN_FRAMES = 5;
+const SHORTCUT_RELEASE_START_FRAME = 50;
+const SHORTCUT_RELEASE_END_FRAME = 56;
 
 const Pill: FC<{
   children: ReactNode;
@@ -461,20 +472,142 @@ const TriggerCaption: FC = () => {
           Or press the shortcut.
         </div>
       </div>
-      <div
-        style={{
-          padding: "18px 24px",
-          border: `1px solid ${colors.border}`,
-          borderBottomWidth: 5,
-          borderRadius: 14,
-          background: colors.paper,
-          color: colors.navy,
-          fontSize: 27,
-          fontWeight: 800,
-          boxShadow: "0 10px 26px rgba(16, 26, 44, 0.12)",
-        }}
-      >
-        ⌘ ⇧ E
+      <div style={{display: "flex", alignItems: "flex-start", gap: 10}}>
+        {shortcutKeys.map((key) => (
+          <div
+            key={key.label}
+            style={{
+              boxSizing: "border-box",
+              width: key.width,
+              height: 68,
+              display: "grid",
+              placeItems: "center",
+              border: "1px solid",
+              borderColor: interpolateColors(
+                frame,
+                [
+                  0,
+                  key.pressStartFrame,
+                  key.pressStartFrame + SHORTCUT_PRESS_IN_FRAMES,
+                  SHORTCUT_RELEASE_START_FRAME,
+                  SHORTCUT_RELEASE_END_FRAME,
+                  90,
+                ],
+                [
+                  colors.border,
+                  colors.border,
+                  colors.green,
+                  colors.green,
+                  colors.border,
+                  colors.border,
+                ],
+              ),
+              borderBottomWidth: interpolate(
+                frame,
+                [
+                  key.pressStartFrame,
+                  key.pressStartFrame + SHORTCUT_PRESS_IN_FRAMES,
+                  SHORTCUT_RELEASE_START_FRAME,
+                  SHORTCUT_RELEASE_END_FRAME,
+                ],
+                [5, 1, 1, 5],
+                {
+                  extrapolateLeft: "clamp",
+                  extrapolateRight: "clamp",
+                  easing: Easing.bezier(0.16, 1, 0.3, 1),
+                },
+              ),
+              borderRadius: 14,
+              background: interpolateColors(
+                frame,
+                [
+                  0,
+                  key.pressStartFrame,
+                  key.pressStartFrame + SHORTCUT_PRESS_IN_FRAMES,
+                  SHORTCUT_RELEASE_START_FRAME,
+                  SHORTCUT_RELEASE_END_FRAME,
+                  90,
+                ],
+                [
+                  colors.paper,
+                  colors.paper,
+                  colors.greenSoft,
+                  colors.greenSoft,
+                  colors.paper,
+                  colors.paper,
+                ],
+              ),
+              color: interpolateColors(
+                frame,
+                [
+                  0,
+                  key.pressStartFrame,
+                  key.pressStartFrame + SHORTCUT_PRESS_IN_FRAMES,
+                  SHORTCUT_RELEASE_START_FRAME,
+                  SHORTCUT_RELEASE_END_FRAME,
+                  90,
+                ],
+                [
+                  colors.navy,
+                  colors.navy,
+                  "#0f5132",
+                  "#0f5132",
+                  colors.navy,
+                  colors.navy,
+                ],
+              ),
+              fontSize: 29,
+              fontWeight: 850,
+              lineHeight: 1,
+              translate: interpolate(
+                frame,
+                [
+                  key.pressStartFrame,
+                  key.pressStartFrame + SHORTCUT_PRESS_IN_FRAMES,
+                  SHORTCUT_RELEASE_START_FRAME,
+                  SHORTCUT_RELEASE_END_FRAME,
+                ],
+                ["0px 0px", "0px 4px", "0px 4px", "0px 0px"],
+                {
+                  extrapolateLeft: "clamp",
+                  extrapolateRight: "clamp",
+                  easing: Easing.bezier(0.16, 1, 0.3, 1),
+                },
+              ),
+              boxShadow: `0 ${interpolate(
+                frame,
+                [
+                  key.pressStartFrame,
+                  key.pressStartFrame + SHORTCUT_PRESS_IN_FRAMES,
+                  SHORTCUT_RELEASE_START_FRAME,
+                  SHORTCUT_RELEASE_END_FRAME,
+                ],
+                [10, 4, 4, 10],
+                {
+                  extrapolateLeft: "clamp",
+                  extrapolateRight: "clamp",
+                  easing: Easing.bezier(0.16, 1, 0.3, 1),
+                },
+              )}px ${interpolate(
+                frame,
+                [
+                  key.pressStartFrame,
+                  key.pressStartFrame + SHORTCUT_PRESS_IN_FRAMES,
+                  SHORTCUT_RELEASE_START_FRAME,
+                  SHORTCUT_RELEASE_END_FRAME,
+                ],
+                [26, 12, 12, 26],
+                {
+                  extrapolateLeft: "clamp",
+                  extrapolateRight: "clamp",
+                  easing: Easing.bezier(0.16, 1, 0.3, 1),
+                },
+              )}px rgba(16, 26, 44, 0.12)`,
+            }}
+          >
+            {key.label}
+          </div>
+        ))}
       </div>
     </div>
   );
