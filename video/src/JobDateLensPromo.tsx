@@ -10,7 +10,7 @@ import {
   useCurrentFrame,
 } from "remotion";
 
-export const JOB_DATE_LENS_PROMO_DURATION_IN_FRAMES = 16 * 30;
+export const JOB_DATE_LENS_PROMO_DURATION_IN_FRAMES = 12 * 30;
 
 export type JobDateLensPromoProps = {
   recordingFile: string;
@@ -247,7 +247,7 @@ const BrowserCapture: FC = () => {
           width: "100%",
           height: "100%",
           objectFit: "cover",
-          opacity: interpolate(frame, [204, 212], [0, 1], {
+          opacity: interpolate(frame, [174, 182], [0, 1], {
             extrapolateLeft: "clamp",
             extrapolateRight: "clamp",
             easing: Easing.bezier(0.16, 1, 0.3, 1),
@@ -279,14 +279,14 @@ const ProductStage: FC<
         borderRadius: 22,
         background: colors.paper,
         boxShadow: cardShadow,
-        scale: interpolate(frame, [180, 250, 450, 510], [1, 1.12, 1.12, 1], {
+        scale: interpolate(frame, [150, 205, 300, 330], [1, 1.12, 1.12, 1], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
           easing: Easing.bezier(0.16, 1, 0.3, 1),
         }),
         translate: interpolate(
           frame,
-          [180, 250, 450, 510],
+          [150, 205, 300, 330],
           ["0px 0px", "-42px 24px", "-42px 24px", "0px 0px"],
           {
             extrapolateLeft: "clamp",
@@ -297,7 +297,7 @@ const ProductStage: FC<
       }}
     >
       {captureMode === "placeholder" ? (
-        <PlaceholderJobPage showPanel={frame >= 210} />
+        <PlaceholderJobPage showPanel={frame >= 180} />
       ) : captureMode === "browser-stills" ? (
         <BrowserCapture />
       ) : (
@@ -385,7 +385,7 @@ const TriggerCaption: FC = () => {
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        opacity: interpolate(frame, [0, 12, 102, 120], [0, 1, 1, 0], {
+        opacity: interpolate(frame, [0, 12, 72, 90], [0, 1, 1, 0], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
         }),
@@ -428,7 +428,7 @@ const RevealCaption: FC = () => {
         left: 72,
         right: 72,
         top: 76,
-        opacity: interpolate(frame, [0, 16, 150, 175], [0, 1, 1, 0], {
+        opacity: interpolate(frame, [0, 12, 104, 120], [0, 1, 1, 0], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
         }),
@@ -498,7 +498,7 @@ const EndCard: FC<{ctaText: string}> = ({ctaText}) => {
         overflow: "hidden",
         background: colors.navy,
         color: colors.paper,
-        opacity: interpolate(frame, [0, 20], [0, 1], {
+        opacity: interpolate(frame, [0, 10], [0, 1], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
           easing: Easing.bezier(0.16, 1, 0.3, 1),
@@ -512,7 +512,7 @@ const EndCard: FC<{ctaText: string}> = ({ctaText}) => {
           height: 720,
           border: "1px solid rgba(255, 255, 255, 0.1)",
           borderRadius: "50%",
-          scale: interpolate(frame, [0, 90], [0.72, 1.08], {
+          scale: interpolate(frame, [0, 60], [0.72, 1.08], {
             extrapolateLeft: "clamp",
             extrapolateRight: "clamp",
             easing: Easing.bezier(0.16, 1, 0.3, 1),
@@ -572,7 +572,7 @@ export const JobDateLensPromo: FC<JobDateLensPromoProps> = ({
         fontFamily,
       }}
     >
-      <Sequence name="Product recording" durationInFrames={480} premountFor={30}>
+      <Sequence name="Product recording" durationInFrames={360} premountFor={30}>
         <ProductStage
           captureMode={captureMode}
           recordingFile={recordingFile}
@@ -582,16 +582,16 @@ export const JobDateLensPromo: FC<JobDateLensPromoProps> = ({
       <Sequence name="Hook" durationInFrames={90} premountFor={30}>
         <Hook />
       </Sequence>
-      <Sequence name="Trigger" from={90} durationInFrames={120} premountFor={30}>
+      <Sequence name="Trigger" from={90} durationInFrames={90} premountFor={30}>
         <TriggerCaption />
       </Sequence>
-      <Sequence name="Reveal" from={210} durationInFrames={180} premountFor={30}>
+      <Sequence name="Reveal" from={180} durationInFrames={120} premountFor={30}>
         <RevealCaption />
       </Sequence>
-      <Sequence name="Fields" from={228} durationInFrames={162} premountFor={30}>
+      <Sequence name="Fields" from={198} durationInFrames={112} premountFor={30}>
         <FieldHighlights />
       </Sequence>
-      <Sequence name="End card" from={390} durationInFrames={90} premountFor={30}>
+      <Sequence name="End card" from={300} durationInFrames={60} premountFor={30}>
         <EndCard ctaText={ctaText} />
       </Sequence>
     </AbsoluteFill>

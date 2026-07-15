@@ -1,6 +1,6 @@
 # JobDateLens X promo
 
-Reusable Remotion composition for a 16-second, square product demo suitable for X.
+Reusable Remotion composition for a 12-second, square product demo suitable for X.
 
 ## Current state
 
@@ -20,7 +20,7 @@ Use the deterministic local fixture so the recording contains no company or pers
 4. Hide bookmarks and unrelated extensions, then size the window to a 16:9 capture area at 1080p or higher.
 5. Start recording and hold the untouched page for about two seconds.
 6. Click the JobDateLens toolbar icon or press `Command+Shift+E`.
-7. Leave the real JobDateLens badge visible for at least six seconds, then stop recording.
+7. Leave the real JobDateLens badge visible for at least four seconds, then stop recording.
 8. Save the recording as `public/jobdatelens-demo.mp4`.
 9. In `src/Composition.tsx`, change `captureMode` to `"recording"`.
 10. Adjust `ctaText` if the final call to action is not `Link in post`.
@@ -52,7 +52,7 @@ The finished video is written to `out/jobdatelens-x.mp4`.
 - Composition ID: `JobDateLensXPromo`
 - Canvas: 1080 x 1080
 - Frame rate: 30 fps
-- Duration: 16 seconds / 480 frames
+- Duration: 12 seconds / 360 frames
 - Audio: intentionally optional; the story must work muted
 - Safe margin: 72 px
 
@@ -61,9 +61,9 @@ Timeline:
 | Time | Message |
 | --- | --- |
 | 0-3s | Before you apply: Find out when this job was posted. |
-| 3-7s | Trigger with one click or the keyboard shortcut. |
-| 7-13s | Reveal public job-page dates, with Date posted and Application deadline appearing in sequence. |
-| 13-16s | JobDateLens end card and CTA. |
+| 3-6s | Trigger with one click or the keyboard shortcut. |
+| 6-10s | Reveal public job-page dates, with Date posted and Application deadline appearing in sequence. |
+| 10-12s | JobDateLens end card and CTA. |
 
 ## Publishing gate
 
@@ -73,7 +73,7 @@ Before publishing, verify all of the following:
 - The product stage shows either the verified Codex-browser capture or a clean Chrome recording.
 - Dates and status are readable on a phone-sized preview.
 - No personal or employer-sensitive information is visible.
-- The exported MP4 is no longer than 16 seconds and remains below X's upload limit.
+- The exported MP4 is no longer than 12 seconds and remains below X's upload limit.
 - The post contains the correct installation or beta link.
 
 ## License note

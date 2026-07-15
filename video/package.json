@@ -30,9 +30,9 @@
     "render:promo": "remotion render JobDateLensXPromo out/jobdatelens-x.mp4",
     "still:hook": "remotion still JobDateLensXPromo out/hook.png --frame=45",
     "still:trigger": "remotion still JobDateLensXPromo out/trigger.png --frame=150",
-    "still:reveal": "remotion still JobDateLensXPromo out/reveal.png --frame=330",
-    "still:fields": "remotion still JobDateLensXPromo out/fields.png --frame=330",
-    "still:end": "remotion still JobDateLensXPromo out/end-card.png --frame=435",
+    "still:reveal": "remotion still JobDateLensXPromo out/reveal.png --frame=255",
+    "still:fields": "remotion still JobDateLensXPromo out/fields.png --frame=255",
+    "still:end": "remotion still JobDateLensXPromo out/end-card.png --frame=330",
     "upgrade": "remotion upgrade",
     "lint": "eslint src && tsc"
   },
