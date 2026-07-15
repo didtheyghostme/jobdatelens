@@ -40,14 +40,28 @@ JobDateLens does not call a JobDateLens backend, send data to a private service,
 
 Only public job-page or public job-board API fields are used. Authenticated employer APIs such as Greenhouse Harvest or private Ashby APIs are out of scope.
 
-## Test
+## Testt
 
-Run the parser tests with Node:
+Run the automated tests with Node:
 
 ```sh
 npm test
 ```
 
-The tests use inline JSON-LD samples and cover standard JSON-LD, arrays, `@graph`, multiple candidates, missing or invalid dates, expired postings, malformed JSON, and non-job structured data.
+The suite covers parsing, provider fallbacks, browser behavior, and badge styling. Parser cases include standard JSON-LD, arrays, `@graph`, multiple candidates, missing or invalid dates, expired postings, malformed JSON, and non-job structured data.
 
 For manual UI testing, load the extension unpacked in Chrome and visit a real job posting page that includes `JobPosting` JSON-LD.
+
+## Package a release
+
+`manifest.json` is the only source of truth for the extension version. Before a release, update its `version` field using [Chrome's extension version format](https://developer.chrome.com/docs/extensions/reference/manifest/version).
+
+Create the release ZIP on macOS or Linux:
+
+```sh
+npm run package:extension
+```
+
+The command runs the full test suite, reads `manifest.json.version` directly, and then recreates `dist/jobdatelens-v<version>.zip`. It does not change `manifest.json`. The ZIP contains only the four runtime files at its root: `manifest.json`, `background.js`, `content.js`, and `content.css`.
+
+Create a GitHub Release with the tag `v<version>` and manually attach that ZIP. Users should download and extract the ZIP, then choose the extracted folder in Chrome's **Load unpacked** dialog.

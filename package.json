@@ -1,9 +1,9 @@
 {
   "name": "jobdatelens",
-  "version": "0.1.0",
   "private": true,
   "description": "Chrome extension that shows datePosted and validThrough from JobPosting JSON-LD on job pages.",
   "scripts": {
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "package:extension": "npm test && version=$(node -p \"require('./manifest.json').version\") && mkdir -p dist && rm -f \"dist/jobdatelens-v${version}.zip\" && zip -j \"dist/jobdatelens-v${version}.zip\" manifest.json background.js content.js content.css"
   }
 }
