@@ -1,0 +1,42 @@
+{
+  "name": "video",
+  "version": "1.0.0",
+  "description": "Reusable Remotion promo video for the JobDateLens Chrome extension",
+  "repository": {},
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "@remotion/cli": "4.0.489",
+    "@remotion/media": "4.0.489",
+    "@remotion/tailwind-v4": "4.0.489",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "remotion": "4.0.489",
+    "tailwindcss": "4.0.0"
+  },
+  "devDependencies": {
+    "@remotion/eslint-config-flat": "4.0.489",
+    "@types/react": "19.2.7",
+    "@types/web": "0.0.166",
+    "eslint": "9.19.0",
+    "prettier": "3.8.1",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "demo:serve": "node demo/server.mjs",
+    "demo:validate": "node demo/validate-fixture.mjs",
+    "dev": "remotion studio",
+    "build": "remotion bundle",
+    "render:promo": "remotion render JobDateLensXPromo out/jobdatelens-x.mp4",
+    "still:hook": "remotion still JobDateLensXPromo out/hook.png --frame=45",
+    "still:trigger": "remotion still JobDateLensXPromo out/trigger.png --frame=150",
+    "still:reveal": "remotion still JobDateLensXPromo out/reveal.png --frame=330",
+    "still:fields": "remotion still JobDateLensXPromo out/fields.png --frame=330",
+    "still:end": "remotion still JobDateLensXPromo out/end-card.png --frame=435",
+    "upgrade": "remotion upgrade",
+    "lint": "eslint src && tsc"
+  },
+  "sideEffects": [
+    "*.css"
+  ]
+}
