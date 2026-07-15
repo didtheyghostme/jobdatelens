@@ -9,6 +9,7 @@ The composition defaults to deterministic before/after frames captured from the 
 For a simpler illustrated product demo, render with `captureMode` set to `"placeholder"` and `showPlaceholderWatermark` set to `false`. Keep the watermark enabled for draft placeholder reviews.
 
 The dedicated `JobDateLensSimpleMockup` composition provides that clean illustrated version without runtime prop overrides.
+It includes animated `Command+Shift+E` keycaps and synchronized highlights between the Date posted and Application deadline callouts and their matching panel rows.
 
 ## Add the real recording
 
@@ -45,7 +46,13 @@ npm run still:end
 npm run render:promo
 ```
 
-The finished video is written to `out/jobdatelens-x.mp4`.
+The browser-capture video is written to `out/jobdatelens-x.mp4`.
+
+Render the clean illustrated promo currently linked from the repository README with:
+
+```sh
+npx remotion render JobDateLensSimpleMockup ../jobdatelens-simple-mockup.mp4 --codec=h264
+```
 
 ## Composition contract
 
@@ -61,8 +68,8 @@ Timeline:
 | Time | Message |
 | --- | --- |
 | 0-3s | Before you apply: Find out when this job was posted. |
-| 3-6s | Trigger with one click or the keyboard shortcut. |
-| 6-10s | Reveal public job-page dates, with Date posted and Application deadline appearing in sequence. |
+| 3-6s | Trigger with one click or sequentially animated `Command`, `Shift`, and `E` keycaps. |
+| 6-10s | Reveal Date posted and Application deadline in sequence while highlighting their matching POSTED and DEADLINE panel rows. |
 | 10-12s | JobDateLens end card and CTA. |
 
 ## Publishing gate
@@ -72,6 +79,7 @@ Before publishing, verify all of the following:
 - The placeholder watermark is absent.
 - The product stage shows either the verified Codex-browser capture or a clean Chrome recording.
 - Dates and status are readable on a phone-sized preview.
+- Shortcut keypresses and date-row highlights remain synchronized with their callouts.
 - No personal or employer-sensitive information is visible.
 - The exported MP4 is no longer than 12 seconds and remains below X's upload limit.
 - The post contains the correct installation or beta link.
