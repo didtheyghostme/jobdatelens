@@ -2,8 +2,7 @@
 
 Chrome extension that shows public job posting dates on job pages.
 
-https://github.com/user-attachments/assets/61fcb0c1-c048-4222-9bca-a86043ed3f3f
-
+https://github.com/user-attachments/assets/711439ae-b86f-41b3-9805-3e97ef4e6184
 
 ## Load locally
 
