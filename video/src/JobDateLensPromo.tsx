@@ -37,6 +37,15 @@ const fontFamily =
 
 const cardShadow = "0 30px 90px rgba(16, 26, 44, 0.24)";
 
+const dateFields = [
+  {panelLabel: "POSTED", pillLabel: "Date posted"},
+  {panelLabel: "DEADLINE", pillLabel: "Application deadline"},
+] as const;
+
+const FIELD_HIGHLIGHTS_START_FRAME = 198;
+const FIELD_HIGHLIGHT_STAGGER_IN_FRAMES = 18;
+const FIELD_HIGHLIGHT_ENTER_IN_FRAMES = 12;
+
 const Pill: FC<{
   children: ReactNode;
   style?: CSSProperties;
@@ -60,6 +69,8 @@ const Pill: FC<{
 };
 
 const PlaceholderPanel: FC = () => {
+  const frame = useCurrentFrame();
+
   return (
     <div
       style={{
@@ -103,44 +114,95 @@ const PlaceholderPanel: FC = () => {
           ["COMPANY", "Example Labs", ""],
           ["POSTED", "Jul 8, 2026", "posted 7 days ago"],
           ["DEADLINE", "Aug 15, 2026", "expires in 31 days"],
-        ].map(([label, value, helper]) => (
-          <div
-            key={label}
-            style={{
-              display: "grid",
-              gridTemplateColumns: "88px 1fr",
-              gap: 8,
-              alignItems: "start",
-            }}
-          >
-            <span
+        ].map(([label, value, helper]) => {
+          const highlightedFieldIndex = dateFields.findIndex(
+            (field) => field.panelLabel === label,
+          );
+          const highlightStartFrame =
+            FIELD_HIGHLIGHTS_START_FRAME +
+            highlightedFieldIndex * FIELD_HIGHLIGHT_STAGGER_IN_FRAMES;
+
+          return (
+            <div
+              key={label}
               style={{
-                color: colors.muted,
-                fontSize: 12,
-                fontWeight: 800,
-                letterSpacing: "0.04em",
+                display: "grid",
+                gridTemplateColumns: "88px 1fr",
+                gap: 8,
+                alignItems: "start",
+                margin: "-5px -7px",
+                padding: "5px 7px",
+                borderRadius: 8,
+                background:
+                  highlightedFieldIndex === -1
+                    ? "transparent"
+                    : `rgba(114, 224, 174, ${interpolate(
+                        frame,
+                        [highlightStartFrame, highlightStartFrame + 10],
+                        [0, 0.2],
+                        {
+                          extrapolateLeft: "clamp",
+                          extrapolateRight: "clamp",
+                          easing: Easing.bezier(0.16, 1, 0.3, 1),
+                        },
+                      )})`,
+                boxShadow:
+                  highlightedFieldIndex === -1
+                    ? "none"
+                    : `0 0 0 ${interpolate(
+                        frame,
+                        [highlightStartFrame, highlightStartFrame + 10],
+                        [0, 2],
+                        {
+                          extrapolateLeft: "clamp",
+                          extrapolateRight: "clamp",
+                          easing: Easing.bezier(0.16, 1, 0.3, 1),
+                        },
+                      )}px rgba(22, 163, 106, 0.92)`,
+                scale:
+                  highlightedFieldIndex === -1
+                    ? 1
+                    : interpolate(
+                        frame,
+                        [highlightStartFrame, highlightStartFrame + 6, highlightStartFrame + 14],
+                        [1, 1.02, 1],
+                        {
+                          extrapolateLeft: "clamp",
+                          extrapolateRight: "clamp",
+                          easing: Easing.bezier(0.16, 1, 0.3, 1),
+                        },
+                      ),
               }}
             >
-              {label}
-            </span>
-            <span style={{fontSize: 15, fontWeight: 700}}>
-              {value}
-              {helper ? (
-                <small
-                  style={{
-                    display: "block",
-                    marginTop: 3,
-                    color: colors.muted,
-                    fontSize: 12,
-                    fontWeight: 550,
-                  }}
-                >
-                  {helper}
-                </small>
-              ) : null}
-            </span>
-          </div>
-        ))}
+              <span
+                style={{
+                  color: colors.muted,
+                  fontSize: 12,
+                  fontWeight: 800,
+                  letterSpacing: "0.04em",
+                }}
+              >
+                {label}
+              </span>
+              <span style={{fontSize: 15, fontWeight: 700}}>
+                {value}
+                {helper ? (
+                  <small
+                    style={{
+                      display: "block",
+                      marginTop: 3,
+                      color: colors.muted,
+                      fontSize: 12,
+                      fontWeight: 550,
+                    }}
+                  >
+                    {helper}
+                  </small>
+                ) : null}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -446,7 +508,6 @@ const RevealCaption: FC = () => {
 
 const FieldHighlights: FC = () => {
   const frame = useCurrentFrame();
-  const fields = ["Date posted", "Application deadline"];
 
   return (
     <div
@@ -459,20 +520,36 @@ const FieldHighlights: FC = () => {
         gap: 14,
       }}
     >
-      {fields.map((field, index) => (
+      {dateFields.map((field, index) => (
         <Pill
-          key={field}
+          key={field.pillLabel}
           style={{
-            opacity: interpolate(frame, [index * 18, index * 18 + 12], [0, 1], {
-              extrapolateLeft: "clamp",
-              extrapolateRight: "clamp",
-              easing: Easing.bezier(0.16, 1, 0.3, 1),
-            }),
-            translate: interpolate(frame, [index * 18, index * 18 + 12], ["0px 14px", "0px 0px"], {
-              extrapolateLeft: "clamp",
-              extrapolateRight: "clamp",
-              easing: Easing.bezier(0.16, 1, 0.3, 1),
-            }),
+            opacity: interpolate(
+              frame,
+              [
+                index * FIELD_HIGHLIGHT_STAGGER_IN_FRAMES,
+                index * FIELD_HIGHLIGHT_STAGGER_IN_FRAMES + FIELD_HIGHLIGHT_ENTER_IN_FRAMES,
+              ],
+              [0, 1],
+              {
+                extrapolateLeft: "clamp",
+                extrapolateRight: "clamp",
+                easing: Easing.bezier(0.16, 1, 0.3, 1),
+              },
+            ),
+            translate: interpolate(
+              frame,
+              [
+                index * FIELD_HIGHLIGHT_STAGGER_IN_FRAMES,
+                index * FIELD_HIGHLIGHT_STAGGER_IN_FRAMES + FIELD_HIGHLIGHT_ENTER_IN_FRAMES,
+              ],
+              ["0px 14px", "0px 0px"],
+              {
+                extrapolateLeft: "clamp",
+                extrapolateRight: "clamp",
+                easing: Easing.bezier(0.16, 1, 0.3, 1),
+              },
+            ),
             border: `1px solid ${colors.border}`,
             background: colors.paper,
             color: colors.navy,
@@ -480,7 +557,7 @@ const FieldHighlights: FC = () => {
           }}
         >
           <span style={{marginRight: 9, color: colors.green}}>✓</span>
-          {field}
+          {field.pillLabel}
         </Pill>
       ))}
     </div>
@@ -588,7 +665,12 @@ export const JobDateLensPromo: FC<JobDateLensPromoProps> = ({
       <Sequence name="Reveal" from={180} durationInFrames={120} premountFor={30}>
         <RevealCaption />
       </Sequence>
-      <Sequence name="Fields" from={198} durationInFrames={112} premountFor={30}>
+      <Sequence
+        name="Fields"
+        from={FIELD_HIGHLIGHTS_START_FRAME}
+        durationInFrames={112}
+        premountFor={30}
+      >
         <FieldHighlights />
       </Sequence>
       <Sequence name="End card" from={300} durationInFrames={60} premountFor={30}>
