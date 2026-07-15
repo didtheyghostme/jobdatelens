@@ -28,11 +28,13 @@
     "dev": "remotion studio",
     "build": "remotion bundle",
     "render:promo": "remotion render JobDateLensXPromo out/jobdatelens-x.mp4",
+    "render:readme": "remotion render JobDateLensReadmeDemo ../jobdatelens-readme-demo.mp4 --codec=h264",
     "still:hook": "remotion still JobDateLensXPromo out/hook.png --frame=45",
     "still:trigger": "remotion still JobDateLensXPromo out/trigger.png --frame=150",
     "still:reveal": "remotion still JobDateLensXPromo out/reveal.png --frame=255",
     "still:fields": "remotion still JobDateLensXPromo out/fields.png --frame=255",
     "still:end": "remotion still JobDateLensXPromo out/end-card.png --frame=330",
+    "still:readme": "remotion still JobDateLensReadmeDemo out/readme-preview.png --frame=225",
     "upgrade": "remotion upgrade",
     "lint": "eslint src && tsc"
   },

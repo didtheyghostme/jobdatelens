@@ -1,6 +1,7 @@
 # JobDateLens X promo
 
 Reusable Remotion composition for a 12-second, square product demo suitable for X.
+It also includes a native 16:9 version for the GitHub README.
 
 ## Current state
 
@@ -43,7 +44,9 @@ npm run still:trigger
 npm run still:reveal
 npm run still:fields
 npm run still:end
+npm run still:readme
 npm run render:promo
+npm run render:readme
 ```
 
 The browser-capture video is written to `out/jobdatelens-x.mp4`.
@@ -54,6 +57,16 @@ Render the clean illustrated promo currently linked from the repository README w
 npx remotion render JobDateLensSimpleMockup ../jobdatelens-simple-mockup.mp4 --codec=h264
 ```
 
+Render the landscape GitHub README version with:
+
+```sh
+npm run render:readme
+```
+
+The upload-ready file is written to `../jobdatelens-readme-demo.mp4`. Upload it
+through GitHub's Markdown editor, then replace the repository README's current
+attachment URL with the new `github.com/user-attachments/assets/...` URL.
+
 ## Composition contract
 
 - Composition ID: `JobDateLensXPromo`
@@ -62,6 +75,9 @@ npx remotion render JobDateLensSimpleMockup ../jobdatelens-simple-mockup.mp4 --c
 - Duration: 12 seconds / 360 frames
 - Audio: intentionally optional; the story must work muted
 - Safe margin: 72 px
+
+The `JobDateLensReadmeDemo` composition uses the same 360-frame timeline on a
+1280 x 720 canvas, with the message on the left and product mockup on the right.
 
 Timeline:
 

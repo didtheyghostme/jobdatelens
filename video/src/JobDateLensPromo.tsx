@@ -18,6 +18,7 @@ export type JobDateLensPromoProps = {
   captureMode: "browser-stills" | "recording" | "placeholder";
   showPlaceholderWatermark: boolean;
   ctaText: string;
+  layout: "square" | "landscape";
 };
 
 const colors = {
@@ -334,17 +335,18 @@ const BrowserCapture: FC = () => {
 const ProductStage: FC<
   Pick<
     JobDateLensPromoProps,
-    "captureMode" | "recordingFile" | "showPlaceholderWatermark"
+    "captureMode" | "layout" | "recordingFile" | "showPlaceholderWatermark"
   >
-> = ({captureMode, recordingFile, showPlaceholderWatermark}) => {
+> = ({captureMode, layout, recordingFile, showPlaceholderWatermark}) => {
   const frame = useCurrentFrame();
+  const isLandscape = layout === "landscape";
 
   return (
     <div
       style={{
         position: "absolute",
-        left: 72,
-        top: 328,
+        left: isLandscape ? 535 : 72,
+        top: isLandscape ? 148 : 328,
         width: 936,
         height: 576,
         overflow: "hidden",
@@ -352,21 +354,26 @@ const ProductStage: FC<
         borderRadius: 22,
         background: colors.paper,
         boxShadow: cardShadow,
-        scale: interpolate(frame, [150, 205, 300, 330], [1, 1.12, 1.12, 1], {
-          extrapolateLeft: "clamp",
-          extrapolateRight: "clamp",
-          easing: Easing.bezier(0.16, 1, 0.3, 1),
-        }),
+        scale:
+          (isLandscape ? 0.68 : 1) *
+          interpolate(frame, [150, 205, 300, 330], [1, 1.12, 1.12, 1], {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+            easing: Easing.bezier(0.16, 1, 0.3, 1),
+          }),
         translate: interpolate(
           frame,
           [150, 205, 300, 330],
-          ["0px 0px", "-42px 24px", "-42px 24px", "0px 0px"],
+          isLandscape
+            ? ["0px 0px", "-18px 18px", "-18px 18px", "0px 0px"]
+            : ["0px 0px", "-42px 24px", "-42px 24px", "0px 0px"],
           {
             extrapolateLeft: "clamp",
             extrapolateRight: "clamp",
             easing: Easing.bezier(0.16, 1, 0.3, 1),
           },
         ),
+        transformOrigin: isLandscape ? "top left" : undefined,
       }}
     >
       {captureMode === "placeholder" ? (
@@ -403,16 +410,18 @@ const ProductStage: FC<
   );
 };
 
-const Hook: FC = () => {
+const Hook: FC<Pick<JobDateLensPromoProps, "layout">> = ({layout}) => {
   const frame = useCurrentFrame();
+  const isLandscape = layout === "landscape";
 
   return (
     <div
       style={{
         position: "absolute",
-        left: 72,
-        right: 72,
-        top: 72,
+        left: isLandscape ? 64 : 72,
+        right: isLandscape ? undefined : 72,
+        top: isLandscape ? 84 : 72,
+        width: isLandscape ? 420 : undefined,
         opacity: interpolate(frame, [0, 14, 76, 90], [0, 1, 1, 0], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
@@ -430,10 +439,10 @@ const Hook: FC = () => {
       </Pill>
       <h1
         style={{
-          maxWidth: 936,
+          maxWidth: isLandscape ? 420 : 936,
           margin: 0,
           color: colors.navy,
-          fontSize: 62,
+          fontSize: isLandscape ? 58 : 62,
           fontWeight: 850,
           letterSpacing: "-0.045em",
           lineHeight: 1.02,
@@ -445,19 +454,23 @@ const Hook: FC = () => {
   );
 };
 
-const TriggerCaption: FC = () => {
+const TriggerCaption: FC<Pick<JobDateLensPromoProps, "layout">> = ({layout}) => {
   const frame = useCurrentFrame();
+  const isLandscape = layout === "landscape";
 
   return (
     <div
       style={{
         position: "absolute",
-        left: 72,
-        right: 72,
-        top: 92,
+        left: isLandscape ? 64 : 72,
+        right: isLandscape ? undefined : 72,
+        top: isLandscape ? 126 : 92,
+        width: isLandscape ? 420 : undefined,
         display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
+        flexDirection: isLandscape ? "column" : "row",
+        alignItems: isLandscape ? "flex-start" : "center",
+        justifyContent: isLandscape ? "flex-start" : "space-between",
+        gap: isLandscape ? 42 : undefined,
         opacity: interpolate(frame, [0, 12, 72, 90], [0, 1, 1, 0], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
@@ -613,16 +626,18 @@ const TriggerCaption: FC = () => {
   );
 };
 
-const RevealCaption: FC = () => {
+const RevealCaption: FC<Pick<JobDateLensPromoProps, "layout">> = ({layout}) => {
   const frame = useCurrentFrame();
+  const isLandscape = layout === "landscape";
 
   return (
     <div
       style={{
         position: "absolute",
-        left: 72,
-        right: 72,
-        top: 76,
+        left: isLandscape ? 64 : 72,
+        right: isLandscape ? undefined : 72,
+        top: isLandscape ? 92 : 76,
+        width: isLandscape ? 430 : undefined,
         opacity: interpolate(frame, [0, 12, 104, 120], [0, 1, 1, 0], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
@@ -632,24 +647,35 @@ const RevealCaption: FC = () => {
       <Pill style={{marginBottom: 18, background: colors.greenSoft, color: "#0f5132"}}>
         Public job-page data
       </Pill>
-      <div style={{color: colors.navy, fontSize: 58, fontWeight: 850, letterSpacing: "-0.04em"}}>
+      <div
+        style={{
+          color: colors.navy,
+          fontSize: isLandscape ? 52 : 58,
+          fontWeight: 850,
+          letterSpacing: "-0.04em",
+          lineHeight: 1.04,
+        }}
+      >
         Dates, surfaced instantly.
       </div>
     </div>
   );
 };
 
-const FieldHighlights: FC = () => {
+const FieldHighlights: FC<Pick<JobDateLensPromoProps, "layout">> = ({layout}) => {
   const frame = useCurrentFrame();
+  const isLandscape = layout === "landscape";
 
   return (
     <div
       style={{
         position: "absolute",
-        left: 72,
-        right: 72,
-        top: 230,
+        left: isLandscape ? 64 : 72,
+        right: isLandscape ? undefined : 72,
+        top: isLandscape ? 290 : 230,
         display: "flex",
+        flexDirection: isLandscape ? "column" : "row",
+        alignItems: isLandscape ? "flex-start" : undefined,
         gap: 14,
       }}
     >
@@ -768,6 +794,7 @@ const EndCard: FC<{ctaText: string}> = ({ctaText}) => {
 
 export const JobDateLensPromo: FC<JobDateLensPromoProps> = ({
   captureMode,
+  layout,
   recordingFile,
   showPlaceholderWatermark,
   ctaText,
@@ -785,18 +812,19 @@ export const JobDateLensPromo: FC<JobDateLensPromoProps> = ({
       <Sequence name="Product recording" durationInFrames={360} premountFor={30}>
         <ProductStage
           captureMode={captureMode}
+          layout={layout}
           recordingFile={recordingFile}
           showPlaceholderWatermark={showPlaceholderWatermark}
         />
       </Sequence>
       <Sequence name="Hook" durationInFrames={90} premountFor={30}>
-        <Hook />
+        <Hook layout={layout} />
       </Sequence>
       <Sequence name="Trigger" from={90} durationInFrames={90} premountFor={30}>
-        <TriggerCaption />
+        <TriggerCaption layout={layout} />
       </Sequence>
       <Sequence name="Reveal" from={180} durationInFrames={120} premountFor={30}>
-        <RevealCaption />
+        <RevealCaption layout={layout} />
       </Sequence>
       <Sequence
         name="Fields"
@@ -804,7 +832,7 @@ export const JobDateLensPromo: FC<JobDateLensPromoProps> = ({
         durationInFrames={112}
         premountFor={30}
       >
-        <FieldHighlights />
+        <FieldHighlights layout={layout} />
       </Sequence>
       <Sequence name="End card" from={300} durationInFrames={60} premountFor={30}>
         <EndCard ctaText={ctaText} />

@@ -2,12 +2,8 @@
 
 Chrome extension that shows public job posting dates on job pages.
 
-## Demo
+https://github.com/user-attachments/assets/61fcb0c1-c048-4222-9bca-a86043ed3f3f
 
-https://github.com/user-attachments/assets/e5f85b8c-f527-4908-92a1-70f5ee03b0d6
-
-The demo shows the animated `Command+Shift+E` shortcut followed by synchronized
-highlights for the posted date and application deadline.
 
 ## Load locally
 
