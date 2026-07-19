@@ -4,12 +4,13 @@ Chrome extension that shows public job posting dates on job pages.
 
 https://github.com/user-attachments/assets/eaa16414-8030-4939-9729-60d1cff5b36a
 
-## Load locally
+## Install
 
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked**.
-4. Select this repository folder.
+1. Download `jobdatelens-v<version>.zip` from the latest GitHub release.
+2. Extract the ZIP.
+3. Open `chrome://extensions`.
+4. Enable **Developer mode**.
+5. Click **Load unpacked** and select the extracted folder.
 
 ## Use
 
@@ -52,7 +53,7 @@ npm test
 
 The suite covers parsing, provider fallbacks, browser behavior, and badge styling. Parser cases include standard JSON-LD, arrays, `@graph`, multiple candidates, missing or invalid dates, expired postings, malformed JSON, and non-job structured data.
 
-For manual UI testing, load the extension unpacked in Chrome and visit a real job posting page that includes `JobPosting` JSON-LD.
+For manual UI testing, select this repository folder in Chrome's **Load unpacked** dialog and visit a real job posting page that includes `JobPosting` JSON-LD.
 
 ## Package a release
 
@@ -66,4 +67,4 @@ npm run package:extension
 
 The command runs the full test suite, reads `manifest.json.version` directly, and then recreates `dist/jobdatelens-v<version>.zip`. It does not change `manifest.json`. The ZIP contains only the four runtime files at its root: `manifest.json`, `background.js`, `content.js`, and `content.css`.
 
-Create a GitHub Release with the tag `v<version>` and manually attach that ZIP. Users should download and extract the ZIP, then choose the extracted folder in Chrome's **Load unpacked** dialog.
+Create a GitHub Release with the tag `v<version>` and manually attach that ZIP.
