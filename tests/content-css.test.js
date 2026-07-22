@@ -88,8 +88,8 @@ test("loading spinner is indeterminate but respects reduced motion", () => {
   );
 });
 
-test("Retry uses isolated button styling with stable sizing", () => {
-  const block = getCssBlock("#jobdatelens-badge .jdl-retry-button");
+test("state actions use isolated button styling with stable sizing", () => {
+  const block = getCssBlock("#jobdatelens-badge .jdl-state-button");
 
   assert.match(block, /width:\s*auto;/);
   assert.match(block, /height:\s*auto;/);

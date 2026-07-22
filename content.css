@@ -110,6 +110,11 @@
   background: #dbeafe;
 }
 
+#jobdatelens-badge.jdl-status--watching .jdl-status {
+  color: #37516f;
+  background: #e7edf4;
+}
+
 #jobdatelens-badge .jdl-actions {
   position: static;
   display: flex;
@@ -349,7 +354,7 @@
   white-space: normal;
 }
 
-#jobdatelens-badge .jdl-retry-button {
+#jobdatelens-badge .jdl-state-button {
   position: static;
   display: inline-block;
   width: auto;
@@ -369,11 +374,11 @@
   cursor: pointer;
 }
 
-#jobdatelens-badge .jdl-retry-button:hover {
+#jobdatelens-badge .jdl-state-button:hover {
   background: #eef3f8;
 }
 
-#jobdatelens-badge .jdl-retry-button:focus-visible,
+#jobdatelens-badge .jdl-state-button:focus-visible,
 #jobdatelens-badge .jdl-icon-button:focus-visible {
   outline: 2px solid #2563eb;
   outline-offset: 2px;

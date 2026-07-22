@@ -7,13 +7,12 @@ const manifest = JSON.parse(
   fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8")
 );
 
-test("manifest releases the Navigation API build for Chrome 102+", () => {
-  assert.equal(manifest.version, "1.1.0");
+test("manifest requires Chrome 102+ for Navigation API and chrome.storage.session", () => {
   assert.equal(manifest.minimum_chrome_version, "102");
 });
 
-test("manifest keeps the existing permission and host-access surface", () => {
-  assert.deepEqual(manifest.permissions, ["activeTab", "scripting"]);
+test("manifest adds only session storage to the existing permission surface", () => {
+  assert.deepEqual(manifest.permissions, ["activeTab", "scripting", "storage"]);
   assert.deepEqual(manifest.host_permissions, [
     "https://jobs.lever.co/*",
     "https://www.ycombinator.com/*",

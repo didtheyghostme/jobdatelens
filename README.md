@@ -14,7 +14,7 @@ https://github.com/user-attachments/assets/eaa16414-8030-4939-9729-60d1cff5b36a
 
 ## Use
 
-JobDateLens does not scan every page automatically. To check the current job posting:
+JobDateLens does not watch a site until you explicitly activate it. You can activate it on an individual job or on a careers listing page:
 
 - macOS: press `Command+Shift+E`.
 - Other platforms: press `Alt+Shift+E`.
@@ -25,15 +25,15 @@ If Chrome leaves the JobDateLens shortcut unassigned when the extension is insta
 Chrome leaves JobDateLens unassigned rather than letting it overwrite another extension's existing shortcut.
 This detects only JobDateLens's own unassigned Chrome extension command. Chrome extensions cannot inspect every system, browser, or user-defined shortcut, and some Chrome or operating system shortcuts may take priority.
 
-After a successful scan, the open lens stays active for same-document navigation on that tab. If a job site changes to another posting without a full page load, JobDateLens immediately clears the previous role, company, and dates, keeps the panel visible with `Loading…`, and refreshes the result for the new URL. It ignores hash-only changes. This uses Chrome's Navigation API and does not poll the URL.
+After activation, the lens follows the exact website origin in that tab. This includes both SPA navigation and normal full-page loads on the same protocol, hostname, and port. When an SPA changes to another path or query, JobDateLens immediately clears the previous role, company, and dates, shows `Loading…`, and scans the destination. After a normal same-origin page load, it restores the panel and scans as soon as Chrome reports that the destination is complete. Hash-only changes are ignored, and JobDateLens does not poll the URL or use fixed scan delays.
 
-Close ends the active lens session. Collapse applies only to the currently displayed job; navigating to another posting expands the loading panel again. If a refresh cannot find trustworthy public date data, the panel shows the specific reason with **Retry** and **Close**. Retry performs one fresh scan and does not start an automatic retry loop.
+If a clean scan finds no usable public `JobPosting` data, the panel shows **Watching** and **No public job date data found**. The session remains active, so opening another same-origin job will scan automatically. **Check again** performs one fresh scan. A malformed, stale, mismatched, or unavailable data source instead shows the specific failure reason with **Retry** and **Close**. Neither action starts an automatic retry loop.
 
-A normal full-page navigation replaces the document and ends the session naturally. Trigger JobDateLens again after the new page loads.
+Close ends the session. Closing the tab, opening a different origin (including another subdomain, protocol, or port), restarting the browser, or reloading/updating the extension also ends it. New tabs never inherit a session. Collapse applies only to the currently displayed job, and navigation expands the next result. Pressing the shortcut or toolbar button again performs a fresh coalesced scan; it does not toggle watching off.
 
 The extension scans the active page for public job date data. Most sites are read locally from `<script type="application/ld+json">` blocks. Greenhouse-backed pages may trigger a public, unauthenticated request to Greenhouse's Job Board API for the current job id so JobDateLens can read `first_published`, `updated_at`, and `application_deadline`. Custom company Greenhouse pages are supported when the page exposes a public Greenhouse board token, such as a `boards.greenhouse.io/embed/job_board/js?for=<board>` script. Custom Ashby pages are supported when the page exposes a public `jobs.ashbyhq.com/<board>/embed` or Ashby job URL and the current URL includes an `ashby_jid` UUID; JobDateLens then reads the public Ashby-hosted job page's `JobPosting` JSON-LD.
 
-JobDateLens does not call a JobDateLens backend, send data to a private service, or request storage permissions.
+JobDateLens does not call a JobDateLens backend or send data to a private service. It uses Chrome's memory-only `storage.session` to remember which tab and exact origin are active while the browser is running and the extension remains loaded. Each record contains only the origin, a random session token, and a navigation generation. It never stores job data, full URLs, or browsing history.
 
 ## Public date sources
 
@@ -57,9 +57,9 @@ Run the automated tests with Node:
 npm test
 ```
 
-The suite covers parsing, provider fallbacks, SPA navigation, stale JSON-LD rejection, rapid-navigation cancellation, Retry and Close behavior, loading accessibility, reduced-motion styling, and badge layout. Parser cases include standard JSON-LD, arrays, `@graph`, multiple candidates, missing or invalid dates, expired postings, malformed JSON, and non-job structured data.
+The suite covers parsing, provider fallbacks, SPA and full-page same-origin navigation, memory-only tab sessions, exact-origin termination, stale JSON-LD rejection, rapid-navigation cancellation, neutral no-data behavior, Retry, Check again, Close, loading accessibility, reduced-motion styling, and badge layout. Parser cases include standard JSON-LD, arrays, `@graph`, multiple candidates, missing or invalid dates, expired postings, malformed JSON, and non-job structured data.
 
-For manual UI testing, select this repository folder in Chrome's **Load unpacked** dialog, open a job posting that includes `JobPosting` JSON-LD, trigger JobDateLens, and then use the site's own links to navigate to another posting without refreshing the page. Confirm that the old values disappear immediately and the destination job replaces them after loading.
+For manual UI testing, select this repository folder in Chrome's **Load unpacked** dialog, activate JobDateLens on a careers listing or job posting, and use the site's own links to navigate between postings. Verify both SPA changes and a normal same-origin reload, then confirm that a new tab does not inherit the lens and a cross-origin navigation ends the session.
 
 ## Package a release
 

@@ -546,6 +546,201 @@ test("manual scans keep the panel visible and busy until the result is ready", a
   assert.ok(findButtonByTitle(badge, "Collapse JobDateLens"));
 });
 
+test("a clean no-data scan stays active in the neutral Watching state", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const pageUrl = "https://careers.example.com/openings";
+  const emptyHtml = "careers-listing-html";
+  const document = createFakeDocument();
+  const sentMessages = [];
+  let fetchCalls = 0;
+
+  const fakeWindow = {
+    location: { href: pageUrl },
+    setTimeout,
+    clearTimeout,
+    fetch() {
+      fetchCalls += 1;
+      return Promise.resolve({
+        ok: true,
+        text() {
+          return Promise.resolve(emptyHtml);
+        }
+      });
+    }
+  };
+  const fakeChrome = {
+    runtime: {
+      lastError: null,
+      sendMessage(request, callback) {
+        sentMessages.push(request);
+        if (callback) {
+          callback({ ok: true });
+        }
+      }
+    }
+  };
+  const context = vm.createContext({
+    chrome: fakeChrome,
+    console,
+    document,
+    DOMParser: createMappedDomParser({
+      [emptyHtml]: { title: "Careers", jsonLdText: "" }
+    }),
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+
+  const result = await fakeWindow.JobDateLens.scanOnce();
+  let badge = document.getElementById("jobdatelens-badge");
+
+  assert.equal(result.found, false);
+  assert.equal(badge.attributes["aria-busy"], "false");
+  assert.match(getElementText(badge), /Watching/);
+  assert.match(getElementText(badge), /No public job date data found/);
+  assert.match(
+    getElementText(badge),
+    /JobDateLens is still active on this site\. Open another job or check again\./
+  );
+  assert.equal(findElement(badge, (element) => element.className === "jdl-spinner"), null);
+  assert.equal(findButtonByTitle(badge, "Collapse JobDateLens"), null);
+  const checkAgainButton = findButtonByText(badge, "Check again");
+  assert.ok(checkAgainButton);
+  assert.ok(findButtonByTitle(badge, "Close JobDateLens"));
+
+  checkAgainButton.click();
+  checkAgainButton.click();
+  await flushAsyncWork();
+  assert.equal(fetchCalls, 2);
+  badge = document.getElementById("jobdatelens-badge");
+  assert.match(getElementText(badge), /Watching/);
+
+  findButtonByTitle(badge, "Close JobDateLens").click();
+  assert.equal(document.getElementById("jobdatelens-badge"), null);
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].type, "jobdatelens:stopSession");
+});
+
+test("a no-data listings page follows a later same-document job navigation", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const listingsUrl = "https://careers.example.com/openings";
+  const jobUrl = "https://careers.example.com/openings/platform-engineer";
+  const emptyHtml = "empty-listings-html";
+  const title = "Platform Engineer";
+  const document = createFakeDocument();
+  const navigation = createFakeNavigation(listingsUrl);
+  const frames = createAnimationFrameHarness();
+  let fetchCalls = 0;
+
+  const fakeWindow = {
+    location: { href: listingsUrl },
+    navigation,
+    requestAnimationFrame: frames.requestAnimationFrame,
+    cancelAnimationFrame: frames.cancelAnimationFrame,
+    setTimeout,
+    clearTimeout,
+    fetch() {
+      fetchCalls += 1;
+      return Promise.resolve({
+        ok: true,
+        text() {
+          return Promise.resolve(emptyHtml);
+        }
+      });
+    }
+  };
+  const context = vm.createContext({
+    console,
+    document,
+    DOMParser: createMappedDomParser({
+      [emptyHtml]: { title: "Careers", jsonLdText: "" }
+    }),
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+  await fakeWindow.JobDateLens.scanOnce();
+
+  assert.equal(navigation.listenerCount("navigate"), 1);
+  navigation.dispatch("navigate", {
+    destination: { url: jobUrl, sameDocument: true },
+    hashChange: false
+  });
+  let badge = document.getElementById("jobdatelens-badge");
+  assert.match(getElementText(badge), /Loading job dates…/);
+
+  fakeWindow.location.href = jobUrl;
+  navigation.currentEntry.url = jobUrl;
+  setFakeJobPage(document, title, {
+    jsonLdText: createJobPostingJsonLd(title, "2026-07-20")
+  });
+  navigation.dispatch("navigatesuccess");
+  assert.equal(frames.pendingCount(), 1);
+  frames.runNext();
+  await flushAsyncWork();
+
+  badge = document.getElementById("jobdatelens-badge");
+  assert.match(getElementText(badge), new RegExp(title));
+  assert.equal(fetchCalls, 1);
+});
+
+test("a technical failure keeps watching for the next same-document job", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const failedUrl = "https://careers.example.com/unavailable";
+  const jobUrl = "https://careers.example.com/jobs/recovered";
+  const title = "Recovered Engineer";
+  const document = createFakeDocument();
+  const navigation = createFakeNavigation(failedUrl);
+  const frames = createAnimationFrameHarness();
+  let fetchCalls = 0;
+
+  const fakeWindow = {
+    location: { href: failedUrl },
+    navigation,
+    requestAnimationFrame: frames.requestAnimationFrame,
+    cancelAnimationFrame: frames.cancelAnimationFrame,
+    setTimeout,
+    clearTimeout,
+    fetch() {
+      fetchCalls += 1;
+      return Promise.reject(new Error("network unavailable"));
+    }
+  };
+  const context = vm.createContext({
+    console,
+    document,
+    DOMParser: createMappedDomParser({}),
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+  await fakeWindow.JobDateLens.scanOnce();
+
+  let badge = document.getElementById("jobdatelens-badge");
+  assert.match(getElementText(badge), /Couldn’t load job dates/);
+  assert.equal(navigation.listenerCount("navigate"), 1);
+
+  navigation.dispatch("navigate", {
+    destination: { url: jobUrl, sameDocument: true },
+    hashChange: false
+  });
+  fakeWindow.location.href = jobUrl;
+  navigation.currentEntry.url = jobUrl;
+  setFakeJobPage(document, title, {
+    jsonLdText: createJobPostingJsonLd(title, "2026-07-21")
+  });
+  navigation.dispatch("navigatesuccess");
+  frames.runNext();
+  await flushAsyncWork();
+
+  badge = document.getElementById("jobdatelens-badge");
+  assert.match(getElementText(badge), new RegExp(title));
+  assert.equal(fetchCalls, 1);
+});
+
 test("Ashby SPA navigation and later manual scans reject route-proven stale JSON-LD", async () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   const routeA =
@@ -1087,7 +1282,7 @@ test("failed SPA refresh offers one user-triggered Retry and keeps Close availab
   assert.equal(fetchCalls, 1);
   assert.equal(badge.attributes["aria-busy"], "false");
   assert.match(getElementText(badge), /Couldn’t load job dates/);
-  assert.match(getElementText(badge), /No trustworthy job data found/);
+  assert.match(getElementText(badge), /Structured job data looks stale/);
   assert.ok(findButtonByTitle(badge, "Close JobDateLens"));
   const retryButton = findButtonByText(badge, "Retry");
   assert.ok(retryButton);

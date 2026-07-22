@@ -11,6 +11,7 @@
   var FETCH_HTML_FALLBACK_MESSAGE = "jobdatelens:fetchHtmlFallback";
   var FETCH_YC_JOB_POSTING_MESSAGE = "jobdatelens:fetchYcJobPosting";
   var FETCH_ASHBY_JOB_POSTING_MESSAGE = "jobdatelens:fetchAshbyJobPosting";
+  var STOP_SESSION_MESSAGE = "jobdatelens:stopSession";
   var HTML_ACCEPT_HEADER =
     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
   var JSON_ACCEPT_HEADER = "application/json";
@@ -634,6 +635,18 @@
     return {
       message: "No trustworthy job data found",
       helper: "Greenhouse returned job data, but it does not match the visible job."
+    };
+  }
+
+  function getProviderFetchFailureNotice(provider, error) {
+    var message = error && error.message ? error.message : String(error || "");
+
+    return {
+      message: provider + " job data could not be retrieved",
+      helper:
+        "JobDateLens could not read this posting from " +
+        provider +
+        (message ? ". (" + message + ")" : ".")
     };
   }
 
@@ -2201,7 +2214,28 @@
       navigationListenersInstalled = false;
     }
 
+    function requestBackgroundSessionStop() {
+      if (
+        typeof chrome === "undefined" ||
+        !chrome.runtime ||
+        typeof chrome.runtime.sendMessage !== "function"
+      ) {
+        return;
+      }
+
+      try {
+        chrome.runtime.sendMessage({ type: STOP_SESSION_MESSAGE }, function () {
+          if (chrome.runtime) {
+            void chrome.runtime.lastError;
+          }
+        });
+      } catch (error) {
+        return;
+      }
+    }
+
     function stopLens() {
+      requestBackgroundSessionStop();
       navigationSessionActive = false;
       activeScanId += 1;
       supersedePendingNavigation();
@@ -2291,14 +2325,18 @@
       return header;
     }
 
-    function createStateBody(message, helper, loading, retryCallback) {
+    function createStateBody(message, helper, loading, action) {
       var body = document.createElement("div");
       var state = document.createElement("div");
       var spinner;
       var copy = document.createElement("div");
       var messageNode = document.createElement("div");
       var helperNode;
-      var retryButton;
+      var actionConfig =
+        typeof action === "function"
+          ? { label: "Retry", callback: action }
+          : action;
+      var actionButton;
 
       body.className = "jdl-body jdl-state-body";
       state.className = "jdl-state";
@@ -2322,13 +2360,13 @@
         copy.appendChild(helperNode);
       }
 
-      if (typeof retryCallback === "function") {
-        retryButton = document.createElement("button");
-        retryButton.type = "button";
-        retryButton.className = "jdl-retry-button";
-        retryButton.textContent = "Retry";
-        retryButton.addEventListener("click", retryCallback);
-        copy.appendChild(retryButton);
+      if (actionConfig && typeof actionConfig.callback === "function") {
+        actionButton = document.createElement("button");
+        actionButton.type = "button";
+        actionButton.className = "jdl-state-button";
+        actionButton.textContent = actionConfig.label || "Retry";
+        actionButton.addEventListener("click", actionConfig.callback);
+        copy.appendChild(actionButton);
       }
 
       state.appendChild(copy);
@@ -2371,6 +2409,31 @@
       badge.replaceChildren(
         createBadgeHeader("Unavailable", null, false),
         createStateBody("Couldn’t load job dates", helper, false, retryCallback)
+      );
+    }
+
+    function renderNoDataBadge(checkAgainCallback) {
+      var badge;
+
+      if (!document.body) {
+        return;
+      }
+
+      removeNotice();
+      badge = getOrCreateBadge();
+      badge.className = "jdl-badge jdl-status--watching";
+      badge.setAttribute("aria-busy", "false");
+      badge.replaceChildren(
+        createBadgeHeader("Watching", null, false),
+        createStateBody(
+          "No public job date data found",
+          "JobDateLens is still active on this site. Open another job or check again.",
+          false,
+          {
+            label: "Check again",
+            callback: checkAgainCallback
+          }
+        )
       );
     }
 
@@ -2549,6 +2612,10 @@
 
     function showScanFailure(notice, scanOptions) {
       renderFailureBadge(getFailureHelper(notice), getRetryCallback(scanOptions));
+    }
+
+    function showNoData(scanOptions) {
+      renderNoDataBadge(getRetryCallback(scanOptions));
     }
 
     function runNavigationScan(request) {
@@ -2983,6 +3050,7 @@
       var greenhouseLookupRequest;
       var greenhouseJson;
       var htmlText;
+      var technicalNotice = null;
       var debug = createScanDebug(pageUrl);
 
       if (Number.isInteger(scanOptions.generation) && scanId !== activeScanId) {
@@ -3031,6 +3099,22 @@
       if (domJsonLdUnchanged && domSnapshot.result.selected) {
         domSnapshot = snapshotWithoutSelected(domSnapshot);
       }
+      if (domJsonLdUnchanged) {
+        technicalNotice = {
+          message: "Structured job data looks stale",
+          helper:
+            "The current DOM's JobPosting JSON-LD is unchanged from the previous route."
+        };
+      } else if (
+        domSnapshot.result.errors.length ||
+        domSnapshot.result.staleCandidates.length
+      ) {
+        technicalNotice = getNoResultNotice(
+          domSnapshot.result,
+          domSnapshot.jsonLdTexts,
+          domSnapshot.readyState
+        );
+      }
       addDebugAttempt(debug, {
         source: "dom-jsonld",
         status: domSnapshot.result.selected ? "selected" : "no-match",
@@ -3066,7 +3150,14 @@
           domSnapshot.jsonLdTexts,
           domSnapshot.readyState
         );
-        showScanFailure(notice, scanOptions);
+        if (
+          domSnapshot.readyState === "complete" &&
+          !technicalNotice
+        ) {
+          showNoData(scanOptions);
+        } else {
+          showScanFailure(notice, scanOptions);
+        }
         return summarizeScan(domSnapshot, "dom", "", debug);
       }
 
@@ -3146,6 +3237,7 @@
             lookup: greenhouseLookupDebug.lookup,
             error: error
           });
+          technicalNotice = getProviderFetchFailureNotice("Greenhouse", error);
         }
       } else {
         addDebugAttempt(debug, {
@@ -3199,6 +3291,7 @@
             snapshot: htmlSnapshot,
             lookup: ashbyLookupDebug.lookup
           });
+          technicalNotice = getHtmlFallbackNoResultNotice();
         } catch (error) {
           if (scanId !== activeScanId) {
             addDebugAttempt(debug, {
@@ -3227,6 +3320,7 @@
             lookup: ashbyLookupDebug.lookup,
             error: error
           });
+          technicalNotice = getProviderFetchFailureNotice("Ashby", error);
         }
       } else {
         addDebugAttempt(debug, {
@@ -3317,7 +3411,7 @@
             lookup: ycLookupDebug,
             error: error
           });
-          notice = getHtmlFallbackNoResultNotice();
+          notice = getProviderFetchFailureNotice("YC", error);
           showScanFailure(notice, scanOptions);
           return summarizeScan(domSnapshot, "yc-jsonld", "yc-jsonld-no-match", debug);
         }
@@ -3374,8 +3468,22 @@
           snapshot: htmlSnapshot,
           lookup: { url: fallbackUrl }
         });
-        notice = getHtmlFallbackNoResultNotice();
-        showScanFailure(notice, scanOptions);
+        if (
+          !technicalNotice &&
+          (htmlSnapshot.result.errors.length ||
+            htmlSnapshot.result.staleCandidates.length)
+        ) {
+          technicalNotice = getNoResultNotice(
+            htmlSnapshot.result,
+            htmlSnapshot.jsonLdTexts,
+            htmlSnapshot.readyState
+          );
+        }
+        if (technicalNotice) {
+          showScanFailure(technicalNotice, scanOptions);
+        } else {
+          showNoData(scanOptions);
+        }
         return summarizeScan(htmlSnapshot, "html", "html-no-match", debug);
       } catch (error) {
         if (scanId !== activeScanId) {
@@ -3414,6 +3522,8 @@
     function scanOnce() {
       var routeKey;
       var request;
+
+      startNavigationSession();
 
       if (pendingNavigation && !pendingNavigation.completion.settled) {
         return pendingNavigation.completion.promise;
