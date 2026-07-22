@@ -2042,7 +2042,10 @@
     var navigationListenersInstalled = false;
     var pendingNavigation = null;
     var pendingAnimationFrameId = null;
+    var activeRouteScan = null;
     var lastRenderedJsonLdTexts = null;
+    var lastSuccessfulRouteKey = null;
+    var staleDomFingerprint = null;
 
     function getRouteKey(value) {
       var parsed;
@@ -2064,6 +2067,82 @@
       return left.every(function (text, index) {
         return text === right[index];
       });
+    }
+
+    function createTerminalScanSummary(reason) {
+      return {
+        found: false,
+        candidates: 0,
+        errors: 0,
+        stale: 0,
+        source: "",
+        reason: reason || ""
+      };
+    }
+
+    function createScanCompletion() {
+      var resolvePromise;
+      var rejectPromise;
+      var completion = {
+        settled: false,
+        promise: null,
+        resolve: null,
+        reject: null
+      };
+
+      completion.promise = new Promise(function (resolve, reject) {
+        resolvePromise = resolve;
+        rejectPromise = reject;
+      });
+      completion.resolve = function (value) {
+        if (completion.settled) {
+          return;
+        }
+        completion.settled = true;
+        resolvePromise(value);
+      };
+      completion.reject = function (error) {
+        if (completion.settled) {
+          return;
+        }
+        completion.settled = true;
+        rejectPromise(error);
+      };
+
+      return completion;
+    }
+
+    function rememberStaleDomFingerprint(routeKey, jsonLdTexts) {
+      if (!routeKey || !Array.isArray(jsonLdTexts)) {
+        return;
+      }
+
+      staleDomFingerprint = {
+        routeKey: routeKey,
+        jsonLdTexts: jsonLdTexts.slice()
+      };
+    }
+
+    function clearStaleDomFingerprint(routeKey) {
+      if (staleDomFingerprint && staleDomFingerprint.routeKey === routeKey) {
+        staleDomFingerprint = null;
+      }
+    }
+
+    function getManualJsonLdGuard(routeKey) {
+      if (staleDomFingerprint && staleDomFingerprint.routeKey === routeKey) {
+        return staleDomFingerprint.jsonLdTexts.slice();
+      }
+
+      if (
+        lastSuccessfulRouteKey &&
+        routeKey !== lastSuccessfulRouteKey &&
+        Array.isArray(lastRenderedJsonLdTexts)
+      ) {
+        return lastRenderedJsonLdTexts.slice();
+      }
+
+      return null;
     }
 
     function resetInteractionForNewUrl() {
@@ -2092,6 +2171,25 @@
       }
     }
 
+    function supersedePendingNavigation() {
+      var request = pendingNavigation;
+
+      pendingNavigation = null;
+      cancelPendingAnimationFrame();
+      if (request && request.completion) {
+        request.completion.resolve(createTerminalScanSummary("scan-superseded"));
+      }
+    }
+
+    function supersedeActiveRouteScan() {
+      var scan = activeRouteScan;
+
+      activeRouteScan = null;
+      if (scan && scan.completion) {
+        scan.completion.resolve(createTerminalScanSummary("scan-superseded"));
+      }
+    }
+
     function removeNavigationListeners() {
       if (!navigationApi || !navigationListenersInstalled) {
         return;
@@ -2106,8 +2204,9 @@
     function stopLens() {
       navigationSessionActive = false;
       activeScanId += 1;
-      pendingNavigation = null;
-      cancelPendingAnimationFrame();
+      supersedePendingNavigation();
+      supersedeActiveRouteScan();
+      staleDomFingerprint = null;
       removeNavigationListeners();
       removeNotice();
       removeBadge();
@@ -2337,13 +2436,15 @@
       }
 
       activeScanId += 1;
-      cancelPendingAnimationFrame();
+      supersedePendingNavigation();
+      supersedeActiveRouteScan();
       collapsed = false;
       pendingNavigation = {
         generation: activeScanId,
         targetUrl: targetUrl,
         routeKey: targetRouteKey,
-        previousJsonLdTexts: collectJsonLdScriptTexts(document)
+        previousJsonLdTexts: collectJsonLdScriptTexts(document),
+        completion: createScanCompletion()
       };
       renderLoadingBadge();
     }
@@ -2371,6 +2472,12 @@
           activeScanId !== request.generation ||
           getRouteKey(window.location.href) !== request.routeKey
         ) {
+          if (pendingNavigation === request) {
+            pendingNavigation = null;
+            request.completion.resolve(
+              createTerminalScanSummary("scan-superseded")
+            );
+          }
           return;
         }
 
@@ -2390,21 +2497,25 @@
     }
 
     function handleNavigateError() {
+      var request;
+
       if (!navigationSessionActive || !pendingNavigation) {
         return;
       }
 
+      request = pendingNavigation;
       activeScanId += 1;
       pendingNavigation = null;
       cancelPendingAnimationFrame();
+      request.completion.resolve(createTerminalScanSummary("navigation-failed"));
       renderFailureBadge("The page navigation did not complete.", scanOnce);
     }
 
     function recordSuccessfulScan(pageUrl) {
       currentUrl = pageUrl;
       currentRouteKey = getRouteKey(pageUrl);
+      lastSuccessfulRouteKey = currentRouteKey;
       lastRenderedJsonLdTexts = collectJsonLdScriptTexts(document);
-      pendingNavigation = null;
       startNavigationSession();
     }
 
@@ -2429,7 +2540,7 @@
 
       if (scanOptions && scanOptions.trigger === "navigation") {
         return function () {
-          retryNavigationScan(previousJsonLdTexts);
+          return retryNavigationScan(previousJsonLdTexts);
         };
       }
 
@@ -2441,37 +2552,83 @@
     }
 
     function runNavigationScan(request) {
-      return scanPage({
-        trigger: "navigation",
-        generation: request.generation,
-        expectedRouteKey: request.routeKey,
-        previousJsonLdTexts: request.previousJsonLdTexts
-      });
+      return startTrackedScan(
+        {
+          trigger: "navigation",
+          generation: request.generation,
+          expectedRouteKey: request.routeKey,
+          previousJsonLdTexts: request.previousJsonLdTexts
+        },
+        request.completion
+      );
     }
 
     function retryNavigationScan(previousJsonLdTexts) {
       var request;
+      var routeKey;
+      var jsonLdGuard;
 
       if (!navigationSessionActive) {
         return Promise.resolve(null);
       }
 
+      if (pendingNavigation && !pendingNavigation.completion.settled) {
+        return pendingNavigation.completion.promise;
+      }
+
+      routeKey = getRouteKey(window.location.href);
+      if (
+        activeRouteScan &&
+        !activeRouteScan.completion.settled &&
+        activeRouteScan.routeKey === routeKey
+      ) {
+        return activeRouteScan.completion.promise;
+      }
+
       activeScanId += 1;
-      cancelPendingAnimationFrame();
-      pendingNavigation = null;
+      supersedePendingNavigation();
+      supersedeActiveRouteScan();
       collapsed = false;
+      jsonLdGuard = Array.isArray(previousJsonLdTexts)
+        ? previousJsonLdTexts.slice()
+        : getManualJsonLdGuard(routeKey);
       request = {
         generation: activeScanId,
         targetUrl: window.location.href,
-        routeKey: getRouteKey(window.location.href),
-        previousJsonLdTexts: Array.isArray(previousJsonLdTexts)
-          ? previousJsonLdTexts.slice()
-          : Array.isArray(lastRenderedJsonLdTexts)
-            ? lastRenderedJsonLdTexts.slice()
-            : collectJsonLdScriptTexts(document)
+        routeKey: routeKey,
+        previousJsonLdTexts: jsonLdGuard,
+        completion: createScanCompletion()
       };
       renderLoadingBadge();
       return runNavigationScan(request);
+    }
+
+    function startTrackedScan(scanOptions, completion) {
+      var scanCompletion = completion || createScanCompletion();
+      var routeKey =
+        scanOptions.expectedRouteKey || getRouteKey(window.location.href);
+      var trackedScan = {
+        generation: scanOptions.generation,
+        routeKey: routeKey,
+        completion: scanCompletion
+      };
+
+      activeRouteScan = trackedScan;
+      scanPage(scanOptions).then(scanCompletion.resolve, scanCompletion.reject);
+      scanCompletion.promise.then(
+        function () {
+          if (activeRouteScan === trackedScan) {
+            activeRouteScan = null;
+          }
+        },
+        function () {
+          if (activeRouteScan === trackedScan) {
+            activeRouteScan = null;
+          }
+        }
+      );
+
+      return scanCompletion.promise;
     }
 
     function summarizeScan(snapshot, source, reason, debug) {
@@ -2498,6 +2655,9 @@
     }
 
     function finishSelectedScan(snapshot, source, debug, pageUrl) {
+      if (source === "dom") {
+        clearStaleDomFingerprint(getRouteKey(pageUrl));
+      }
       renderBadge(snapshot.result);
       recordSuccessfulScan(pageUrl);
       return summarizeScan(snapshot, source, "", debug);
@@ -2863,8 +3023,11 @@
       pageContext = getPageContext(document);
       domSnapshot = scanDocument(document, pageContext);
       domJsonLdUnchanged =
-        scanOptions.trigger === "navigation" &&
+        Array.isArray(scanOptions.previousJsonLdTexts) &&
         jsonLdTextsEqual(domSnapshot.jsonLdTexts, scanOptions.previousJsonLdTexts);
+      if (domJsonLdUnchanged) {
+        rememberStaleDomFingerprint(pageRouteKey, domSnapshot.jsonLdTexts);
+      }
       if (domJsonLdUnchanged && domSnapshot.result.selected) {
         domSnapshot = snapshotWithoutSelected(domSnapshot);
       }
@@ -3249,9 +3412,34 @@
     }
 
     function scanOnce() {
-      pendingNavigation = null;
-      cancelPendingAnimationFrame();
-      return scanPage({ trigger: "manual" });
+      var routeKey;
+      var request;
+
+      if (pendingNavigation && !pendingNavigation.completion.settled) {
+        return pendingNavigation.completion.promise;
+      }
+
+      routeKey = getRouteKey(window.location.href);
+      if (
+        activeRouteScan &&
+        !activeRouteScan.completion.settled &&
+        activeRouteScan.routeKey === routeKey
+      ) {
+        return activeRouteScan.completion.promise;
+      }
+
+      activeScanId += 1;
+      supersedePendingNavigation();
+      supersedeActiveRouteScan();
+      collapsed = false;
+      request = {
+        trigger: "manual",
+        generation: activeScanId,
+        expectedRouteKey: routeKey,
+        previousJsonLdTexts: getManualJsonLdGuard(routeKey)
+      };
+
+      return startTrackedScan(request, createScanCompletion());
     }
 
     window.JobDateLens = Object.assign({}, api, {
