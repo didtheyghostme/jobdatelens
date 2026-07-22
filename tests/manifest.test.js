@@ -8,7 +8,7 @@ const manifest = JSON.parse(
 );
 
 test("manifest releases the Navigation API build for Chrome 102+", () => {
-  assert.equal(manifest.version, "1.0.1");
+  assert.equal(manifest.version, "1.1.0");
   assert.equal(manifest.minimum_chrome_version, "102");
 });
 
