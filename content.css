@@ -105,6 +105,11 @@
   background: #fff1c2;
 }
 
+#jobdatelens-badge.jdl-status--loading .jdl-status {
+  color: #1e4f8a;
+  background: #dbeafe;
+}
+
 #jobdatelens-badge .jdl-actions {
   position: static;
   display: flex;
@@ -255,6 +260,135 @@
 
 #jobdatelens-badge .jdl-value--expired {
   color: #9f1239;
+}
+
+#jobdatelens-badge .jdl-state-body {
+  display: block;
+}
+
+#jobdatelens-badge .jdl-state {
+  position: static;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  line-height: 1.35;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+#jobdatelens-badge .jdl-spinner {
+  position: static;
+  display: block;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  padding: 0;
+  border: 2px solid #bfdbfe;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: jdl-spin 700ms linear infinite;
+}
+
+#jobdatelens-badge .jdl-state-copy {
+  position: static;
+  display: block;
+  min-width: 0;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  line-height: 1.35;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+#jobdatelens-badge .jdl-state-message {
+  position: static;
+  display: block;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  color: #1d232b;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+#jobdatelens-badge .jdl-state-helper {
+  position: static;
+  display: block;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 3px 0 0;
+  padding: 0;
+  color: #617182;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+#jobdatelens-badge .jdl-retry-button {
+  position: static;
+  display: inline-block;
+  width: auto;
+  height: auto;
+  min-height: 28px;
+  max-height: none;
+  margin: 9px 0 0;
+  padding: 5px 10px;
+  appearance: none;
+  border: 1px solid #9aabc0;
+  border-radius: 6px;
+  color: #1f3a5f;
+  background: #f7f9fb;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+#jobdatelens-badge .jdl-retry-button:hover {
+  background: #eef3f8;
+}
+
+#jobdatelens-badge .jdl-retry-button:focus-visible,
+#jobdatelens-badge .jdl-icon-button:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+@keyframes jdl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #jobdatelens-badge .jdl-spinner {
+    animation: none;
+  }
 }
 
 #jobdatelens-notice,

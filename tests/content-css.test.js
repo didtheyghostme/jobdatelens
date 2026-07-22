@@ -25,7 +25,11 @@ test("badge text containers define line-height independent of page div resets", 
     "#jobdatelens-badge .jdl-label",
     "#jobdatelens-badge .jdl-value-wrap",
     "#jobdatelens-badge .jdl-value",
-    "#jobdatelens-badge .jdl-helper"
+    "#jobdatelens-badge .jdl-helper",
+    "#jobdatelens-badge .jdl-state",
+    "#jobdatelens-badge .jdl-state-copy",
+    "#jobdatelens-badge .jdl-state-message",
+    "#jobdatelens-badge .jdl-state-helper"
   ].forEach((selector) => {
     assert.match(getCssBlock(selector), /line-height:\s*[^;]+;/, selector);
   });
@@ -43,7 +47,11 @@ test("badge row containers use explicit auto-height layout", () => {
     "#jobdatelens-badge .jdl-label",
     "#jobdatelens-badge .jdl-value-wrap",
     "#jobdatelens-badge .jdl-value",
-    "#jobdatelens-badge .jdl-helper"
+    "#jobdatelens-badge .jdl-helper",
+    "#jobdatelens-badge .jdl-state",
+    "#jobdatelens-badge .jdl-state-copy",
+    "#jobdatelens-badge .jdl-state-message",
+    "#jobdatelens-badge .jdl-state-helper"
   ].forEach((selector) => {
     const block = getCssBlock(selector);
 
@@ -66,4 +74,26 @@ test("notice close button uses stable compact dimensions", () => {
   assert.match(block, /width:\s*22px;/);
   assert.match(block, /height:\s*22px;/);
   assert.match(block, /line-height:\s*1;/);
+});
+
+test("loading spinner is indeterminate but respects reduced motion", () => {
+  const block = getCssBlock("#jobdatelens-badge .jdl-spinner");
+
+  assert.match(block, /border-radius:\s*50%;/);
+  assert.match(block, /animation:\s*jdl-spin\s+700ms\s+linear\s+infinite;/);
+  assert.match(css, /@keyframes\s+jdl-spin\s*{[\s\S]*?transform:\s*rotate\(360deg\);[\s\S]*?}/);
+  assert.match(
+    css,
+    /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*{[\s\S]*?#jobdatelens-badge \.jdl-spinner\s*{[\s\S]*?animation:\s*none;/
+  );
+});
+
+test("Retry uses isolated button styling with stable sizing", () => {
+  const block = getCssBlock("#jobdatelens-badge .jdl-retry-button");
+
+  assert.match(block, /width:\s*auto;/);
+  assert.match(block, /height:\s*auto;/);
+  assert.match(block, /min-height:\s*28px;/);
+  assert.match(block, /line-height:\s*1\.3;/);
+  assert.match(block, /cursor:\s*pointer;/);
 });

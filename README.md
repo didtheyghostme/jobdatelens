@@ -14,7 +14,7 @@ https://github.com/user-attachments/assets/eaa16414-8030-4939-9729-60d1cff5b36a
 
 ## Use
 
-JobDateLens does not scan every page automatically. It checks the current page only when you trigger it:
+JobDateLens does not scan every page automatically. To check the current job posting:
 
 - macOS: press `Command+Shift+E`.
 - Other platforms: press `Alt+Shift+E`.
@@ -24,6 +24,12 @@ Chrome shortcuts can be changed at `chrome://extensions/shortcuts`.
 If Chrome leaves the JobDateLens shortcut unassigned when the extension is installed, JobDateLens shows a small `!` badge on its toolbar icon and updates the icon title with a shortcut setup hint.
 Chrome leaves JobDateLens unassigned rather than letting it overwrite another extension's existing shortcut.
 This detects only JobDateLens's own unassigned Chrome extension command. Chrome extensions cannot inspect every system, browser, or user-defined shortcut, and some Chrome or operating system shortcuts may take priority.
+
+After a successful scan, the open lens stays active for same-document navigation on that tab. If a job site changes to another posting without a full page load, JobDateLens immediately clears the previous role, company, and dates, keeps the panel visible with `Loading…`, and refreshes the result for the new URL. It ignores hash-only changes. This uses Chrome's Navigation API and does not poll the URL.
+
+Close ends the active lens session. Collapse applies only to the currently displayed job; navigating to another posting expands the loading panel again. If a refresh cannot find trustworthy public date data, the panel shows the specific reason with **Retry** and **Close**. Retry performs one fresh scan and does not start an automatic retry loop.
+
+A normal full-page navigation replaces the document and ends the session naturally. Trigger JobDateLens again after the new page loads.
 
 The extension scans the active page for public job date data. Most sites are read locally from `<script type="application/ld+json">` blocks. Greenhouse-backed pages may trigger a public, unauthenticated request to Greenhouse's Job Board API for the current job id so JobDateLens can read `first_published`, `updated_at`, and `application_deadline`. Custom company Greenhouse pages are supported when the page exposes a public Greenhouse board token, such as a `boards.greenhouse.io/embed/job_board/js?for=<board>` script. Custom Ashby pages are supported when the page exposes a public `jobs.ashbyhq.com/<board>/embed` or Ashby job URL and the current URL includes an `ashby_jid` UUID; JobDateLens then reads the public Ashby-hosted job page's `JobPosting` JSON-LD.
 
@@ -51,9 +57,9 @@ Run the automated tests with Node:
 npm test
 ```
 
-The suite covers parsing, provider fallbacks, browser behavior, and badge styling. Parser cases include standard JSON-LD, arrays, `@graph`, multiple candidates, missing or invalid dates, expired postings, malformed JSON, and non-job structured data.
+The suite covers parsing, provider fallbacks, SPA navigation, stale JSON-LD rejection, rapid-navigation cancellation, Retry and Close behavior, loading accessibility, reduced-motion styling, and badge layout. Parser cases include standard JSON-LD, arrays, `@graph`, multiple candidates, missing or invalid dates, expired postings, malformed JSON, and non-job structured data.
 
-For manual UI testing, select this repository folder in Chrome's **Load unpacked** dialog and visit a real job posting page that includes `JobPosting` JSON-LD.
+For manual UI testing, select this repository folder in Chrome's **Load unpacked** dialog, open a job posting that includes `JobPosting` JSON-LD, trigger JobDateLens, and then use the site's own links to navigate to another posting without refreshing the page. Confirm that the old values disappear immediately and the destination job replaces them after loading.
 
 ## Package a release
 

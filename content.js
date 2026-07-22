@@ -2032,14 +2032,46 @@
 
   function installBrowserApi() {
     var currentUrl = window.location.href;
+    var currentRouteKey = getRouteKey(currentUrl);
     var collapsed = false;
     var noticeTimer = null;
     var activeScanId = 0;
     var lastScanDebug = null;
+    var navigationApi = window.navigation || null;
+    var navigationSessionActive = false;
+    var navigationListenersInstalled = false;
+    var pendingNavigation = null;
+    var pendingAnimationFrameId = null;
+    var lastRenderedJsonLdTexts = null;
+
+    function getRouteKey(value) {
+      var parsed;
+
+      try {
+        parsed = new URL(String(value || ""), window.location.href);
+      } catch (error) {
+        return String(value || "").split("#")[0];
+      }
+
+      return parsed.origin + parsed.pathname + parsed.search;
+    }
+
+    function jsonLdTextsEqual(left, right) {
+      if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+        return false;
+      }
+
+      return left.every(function (text, index) {
+        return text === right[index];
+      });
+    }
 
     function resetInteractionForNewUrl() {
-      if (window.location.href !== currentUrl) {
+      var routeKey = getRouteKey(window.location.href);
+
+      if (routeKey !== currentRouteKey) {
         currentUrl = window.location.href;
+        currentRouteKey = routeKey;
         collapsed = false;
       }
     }
@@ -2053,69 +2085,199 @@
       noticeTimer = null;
     }
 
-    function showNotice(message, helper, options) {
-      var notice;
-      var messageNode;
-      var helperNode;
-      var closeButton;
-      var persistent = Boolean(options && options.persistent);
-      var durationMs =
-        options && typeof options.durationMs === "number"
-          ? options.durationMs
-          : TRANSIENT_NOTICE_DURATION_MS;
-
-      if (persistent && !(options && typeof options.durationMs === "number")) {
-        durationMs = 0;
+    function cancelPendingAnimationFrame() {
+      if (pendingAnimationFrameId !== null) {
+        window.cancelAnimationFrame(pendingAnimationFrameId);
+        pendingAnimationFrameId = null;
       }
+    }
+
+    function removeNavigationListeners() {
+      if (!navigationApi || !navigationListenersInstalled) {
+        return;
+      }
+
+      navigationApi.removeEventListener("navigate", handleNavigate);
+      navigationApi.removeEventListener("navigatesuccess", handleNavigateSuccess);
+      navigationApi.removeEventListener("navigateerror", handleNavigateError);
+      navigationListenersInstalled = false;
+    }
+
+    function stopLens() {
+      navigationSessionActive = false;
+      activeScanId += 1;
+      pendingNavigation = null;
+      cancelPendingAnimationFrame();
+      removeNavigationListeners();
+      removeNotice();
+      removeBadge();
+    }
+
+    function startNavigationSession() {
+      navigationSessionActive = true;
+
+      if (
+        !navigationApi ||
+        navigationListenersInstalled ||
+        typeof navigationApi.addEventListener !== "function"
+      ) {
+        return;
+      }
+
+      navigationApi.addEventListener("navigate", handleNavigate);
+      navigationApi.addEventListener("navigatesuccess", handleNavigateSuccess);
+      navigationApi.addEventListener("navigateerror", handleNavigateError);
+      navigationListenersInstalled = true;
+    }
+
+    function getOrCreateBadge() {
+      var badge = document.getElementById(BADGE_ID);
+
+      if (!badge) {
+        badge = document.createElement("aside");
+        badge.id = BADGE_ID;
+        badge.setAttribute("role", "status");
+        badge.setAttribute("aria-live", "polite");
+        document.body.appendChild(badge);
+      }
+
+      return badge;
+    }
+
+    function createIconButton(title, text, listener) {
+      var button = document.createElement("button");
+
+      button.type = "button";
+      button.className = "jdl-icon-button";
+      button.title = title;
+      button.setAttribute("aria-label", title);
+      button.textContent = text;
+      button.addEventListener("click", listener);
+      return button;
+    }
+
+    function createBadgeHeader(statusText, scanResult, collapsible) {
+      var header = document.createElement("div");
+      var title = document.createElement("div");
+      var status = document.createElement("div");
+      var actions = document.createElement("div");
+      var toggleButton;
+      var closeButton;
+
+      header.className = "jdl-header";
+      title.className = "jdl-title";
+      title.title = "JobDateLens";
+      title.textContent = "JobDateLens";
+      status.className = "jdl-status";
+      status.textContent = statusText;
+      actions.className = "jdl-actions";
+
+      if (collapsible) {
+        toggleButton = createIconButton(
+          collapsed ? "Expand JobDateLens" : "Collapse JobDateLens",
+          collapsed ? "v" : "^",
+          function () {
+            collapsed = !collapsed;
+            renderBadge(scanResult);
+          }
+        );
+        actions.appendChild(toggleButton);
+      }
+
+      closeButton = createIconButton("Close JobDateLens", "x", stopLens);
+      actions.appendChild(closeButton);
+      header.appendChild(title);
+      header.appendChild(status);
+      header.appendChild(actions);
+      return header;
+    }
+
+    function createStateBody(message, helper, loading, retryCallback) {
+      var body = document.createElement("div");
+      var state = document.createElement("div");
+      var spinner;
+      var copy = document.createElement("div");
+      var messageNode = document.createElement("div");
+      var helperNode;
+      var retryButton;
+
+      body.className = "jdl-body jdl-state-body";
+      state.className = "jdl-state";
+
+      if (loading) {
+        spinner = document.createElement("span");
+        spinner.className = "jdl-spinner";
+        spinner.setAttribute("aria-hidden", "true");
+        state.appendChild(spinner);
+      }
+
+      copy.className = "jdl-state-copy";
+      messageNode.className = "jdl-state-message";
+      messageNode.textContent = message;
+      copy.appendChild(messageNode);
+
+      if (helper) {
+        helperNode = document.createElement("div");
+        helperNode.className = "jdl-state-helper";
+        helperNode.textContent = helper;
+        copy.appendChild(helperNode);
+      }
+
+      if (typeof retryCallback === "function") {
+        retryButton = document.createElement("button");
+        retryButton.type = "button";
+        retryButton.className = "jdl-retry-button";
+        retryButton.textContent = "Retry";
+        retryButton.addEventListener("click", retryCallback);
+        copy.appendChild(retryButton);
+      }
+
+      state.appendChild(copy);
+      body.appendChild(state);
+      return body;
+    }
+
+    function renderLoadingBadge() {
+      var badge;
 
       if (!document.body) {
         return;
       }
 
       removeNotice();
+      badge = getOrCreateBadge();
+      badge.className = "jdl-badge jdl-status--loading";
+      badge.setAttribute("aria-busy", "true");
+      badge.replaceChildren(
+        createBadgeHeader("Loading…", null, false),
+        createStateBody(
+          "Loading job dates…",
+          "Checking this posting’s public date data.",
+          true
+        )
+      );
+    }
 
-      notice = document.createElement("aside");
-      notice.id = NOTICE_ID;
-      notice.setAttribute("role", "status");
-      notice.setAttribute("aria-live", "polite");
+    function renderFailureBadge(helper, retryCallback) {
+      var badge;
 
-      messageNode = document.createElement("div");
-      messageNode.textContent = message;
-      notice.appendChild(messageNode);
-
-      if (helper) {
-        helperNode = document.createElement("div");
-        helperNode.className = "jdl-notice-helper";
-        helperNode.textContent = helper;
-        notice.appendChild(helperNode);
+      if (!document.body) {
+        return;
       }
 
-      if (persistent) {
-        closeButton = document.createElement("button");
-        closeButton.type = "button";
-        closeButton.className = "jdl-notice-close";
-        closeButton.title = "Close JobDateLens notice";
-        closeButton.setAttribute("aria-label", closeButton.title);
-        closeButton.textContent = "x";
-        closeButton.addEventListener("click", removeNotice);
-        notice.appendChild(closeButton);
-      }
-
-      document.body.appendChild(notice);
-      if (durationMs > 0) {
-        noticeTimer = window.setTimeout(removeNotice, durationMs);
-      }
+      removeNotice();
+      badge = getOrCreateBadge();
+      badge.className = "jdl-badge jdl-status--warning";
+      badge.setAttribute("aria-busy", "false");
+      badge.replaceChildren(
+        createBadgeHeader("Unavailable", null, false),
+        createStateBody("Couldn’t load job dates", helper, false, retryCallback)
+      );
     }
 
     function renderBadge(scanResult) {
-      var badge = document.getElementById(BADGE_ID);
+      var badge;
       var model;
-      var header;
-      var title;
-      var status;
-      var actions;
-      var toggleButton;
-      var closeButton;
       var body;
 
       if (!scanResult.selected) {
@@ -2126,59 +2288,14 @@
       removeNotice();
 
       model = formatJobPosting(scanResult.selected, new Date());
-
-      if (!badge) {
-        badge = document.createElement("aside");
-        badge.id = BADGE_ID;
-        badge.setAttribute("role", "status");
-        badge.setAttribute("aria-live", "polite");
-        document.body.appendChild(badge);
-      }
+      badge = getOrCreateBadge();
 
       badge.className =
         "jdl-badge jdl-status--" +
         model.status.kind +
         (collapsed ? " jdl-badge--collapsed" : "");
 
-      header = document.createElement("div");
-      header.className = "jdl-header";
-
-      title = document.createElement("div");
-      title.className = "jdl-title";
-      title.title = "JobDateLens";
-      title.textContent = "JobDateLens";
-
-      status = document.createElement("div");
-      status.className = "jdl-status";
-      status.textContent = model.status.label;
-
-      actions = document.createElement("div");
-      actions.className = "jdl-actions";
-
-      toggleButton = document.createElement("button");
-      toggleButton.type = "button";
-      toggleButton.className = "jdl-icon-button";
-      toggleButton.title = collapsed ? "Expand JobDateLens" : "Collapse JobDateLens";
-      toggleButton.setAttribute("aria-label", toggleButton.title);
-      toggleButton.textContent = collapsed ? "v" : "^";
-      toggleButton.addEventListener("click", function () {
-        collapsed = !collapsed;
-        renderBadge(scanResult);
-      });
-
-      closeButton = document.createElement("button");
-      closeButton.type = "button";
-      closeButton.className = "jdl-icon-button";
-      closeButton.title = "Close JobDateLens for this page";
-      closeButton.setAttribute("aria-label", closeButton.title);
-      closeButton.textContent = "x";
-      closeButton.addEventListener("click", removeBadge);
-
-      actions.appendChild(toggleButton);
-      actions.appendChild(closeButton);
-      header.appendChild(title);
-      header.appendChild(status);
-      header.appendChild(actions);
+      badge.setAttribute("aria-busy", "false");
 
       body = document.createElement("div");
       body.className = "jdl-body";
@@ -2188,7 +2305,173 @@
         body.appendChild(createRow(row.label, row.value, row.helper, row.state));
       });
 
-      badge.replaceChildren(header, body);
+      badge.replaceChildren(createBadgeHeader(model.status.label, scanResult, true), body);
+    }
+
+    function getCurrentNavigationUrl() {
+      if (navigationApi && navigationApi.currentEntry && navigationApi.currentEntry.url) {
+        return navigationApi.currentEntry.url;
+      }
+
+      return window.location.href;
+    }
+
+    function handleNavigate(event) {
+      var destination;
+      var targetUrl;
+      var targetRouteKey;
+
+      if (!navigationSessionActive || !event) {
+        return;
+      }
+
+      destination = event.destination;
+      if (!destination || !destination.sameDocument || event.hashChange) {
+        return;
+      }
+
+      targetUrl = destination.url || "";
+      targetRouteKey = getRouteKey(targetUrl);
+      if (!targetRouteKey || targetRouteKey === getRouteKey(window.location.href)) {
+        return;
+      }
+
+      activeScanId += 1;
+      cancelPendingAnimationFrame();
+      collapsed = false;
+      pendingNavigation = {
+        generation: activeScanId,
+        targetUrl: targetUrl,
+        routeKey: targetRouteKey,
+        previousJsonLdTexts: collectJsonLdScriptTexts(document)
+      };
+      renderLoadingBadge();
+    }
+
+    function handleNavigateSuccess() {
+      var routeKey;
+      var request;
+
+      if (!navigationSessionActive || !pendingNavigation) {
+        return;
+      }
+
+      routeKey = getRouteKey(getCurrentNavigationUrl());
+      if (routeKey !== pendingNavigation.routeKey) {
+        return;
+      }
+
+      cancelPendingAnimationFrame();
+      request = pendingNavigation;
+      pendingAnimationFrameId = window.requestAnimationFrame(function () {
+        pendingAnimationFrameId = null;
+        if (
+          !navigationSessionActive ||
+          pendingNavigation !== request ||
+          activeScanId !== request.generation ||
+          getRouteKey(window.location.href) !== request.routeKey
+        ) {
+          return;
+        }
+
+        pendingNavigation = null;
+        runNavigationScan(request).catch(function (error) {
+          if (
+            navigationSessionActive &&
+            activeScanId === request.generation &&
+            getRouteKey(window.location.href) === request.routeKey
+          ) {
+            renderFailureBadge(getErrorMessage(error), function () {
+              retryNavigationScan(request.previousJsonLdTexts);
+            });
+          }
+        });
+      });
+    }
+
+    function handleNavigateError() {
+      if (!navigationSessionActive || !pendingNavigation) {
+        return;
+      }
+
+      activeScanId += 1;
+      pendingNavigation = null;
+      cancelPendingAnimationFrame();
+      renderFailureBadge("The page navigation did not complete.", scanOnce);
+    }
+
+    function recordSuccessfulScan(pageUrl) {
+      currentUrl = pageUrl;
+      currentRouteKey = getRouteKey(pageUrl);
+      lastRenderedJsonLdTexts = collectJsonLdScriptTexts(document);
+      pendingNavigation = null;
+      startNavigationSession();
+    }
+
+    function getFailureHelper(notice) {
+      var parts = [];
+
+      if (notice && notice.message) {
+        parts.push(notice.message);
+      }
+      if (notice && notice.helper) {
+        parts.push(notice.helper);
+      }
+
+      return parts.join(" ") || "No trustworthy public job date data was found.";
+    }
+
+    function getRetryCallback(scanOptions) {
+      var previousJsonLdTexts =
+        scanOptions && Array.isArray(scanOptions.previousJsonLdTexts)
+          ? scanOptions.previousJsonLdTexts.slice()
+          : null;
+
+      if (scanOptions && scanOptions.trigger === "navigation") {
+        return function () {
+          retryNavigationScan(previousJsonLdTexts);
+        };
+      }
+
+      return scanOnce;
+    }
+
+    function showScanFailure(notice, scanOptions) {
+      renderFailureBadge(getFailureHelper(notice), getRetryCallback(scanOptions));
+    }
+
+    function runNavigationScan(request) {
+      return scanPage({
+        trigger: "navigation",
+        generation: request.generation,
+        expectedRouteKey: request.routeKey,
+        previousJsonLdTexts: request.previousJsonLdTexts
+      });
+    }
+
+    function retryNavigationScan(previousJsonLdTexts) {
+      var request;
+
+      if (!navigationSessionActive) {
+        return Promise.resolve(null);
+      }
+
+      activeScanId += 1;
+      cancelPendingAnimationFrame();
+      pendingNavigation = null;
+      collapsed = false;
+      request = {
+        generation: activeScanId,
+        targetUrl: window.location.href,
+        routeKey: getRouteKey(window.location.href),
+        previousJsonLdTexts: Array.isArray(previousJsonLdTexts)
+          ? previousJsonLdTexts.slice()
+          : Array.isArray(lastRenderedJsonLdTexts)
+            ? lastRenderedJsonLdTexts.slice()
+            : collectJsonLdScriptTexts(document)
+      };
+      renderLoadingBadge();
+      return runNavigationScan(request);
     }
 
     function summarizeScan(snapshot, source, reason, debug) {
@@ -2207,9 +2490,17 @@
       if (debug) {
         summary.debug = debug;
       }
-      lastScanDebug = debug || null;
+      if (reason !== "scan-superseded") {
+        lastScanDebug = debug || null;
+      }
 
       return summary;
+    }
+
+    function finishSelectedScan(snapshot, source, debug, pageUrl) {
+      renderBadge(snapshot.result);
+      recordSuccessfulScan(pageUrl);
+      return summarizeScan(snapshot, source, "", debug);
     }
 
     function fetchCurrentPageHtml(url) {
@@ -2510,13 +2801,18 @@
       return fetchCurrentPageHtml(url);
     }
 
-    async function scanOnce() {
-      var scanId = activeScanId + 1;
+    async function scanPage(options) {
+      var scanOptions = options || { trigger: "manual" };
+      var scanId = Number.isInteger(scanOptions.generation)
+        ? scanOptions.generation
+        : activeScanId + 1;
       var pageContext;
       var domSnapshot;
+      var domJsonLdUnchanged = false;
       var htmlSnapshot;
       var notice;
       var pageUrl = window.location.href;
+      var pageRouteKey = getRouteKey(pageUrl);
       var fallbackUrl;
       var linkedFallbackUrl;
       var ycLookupRequest;
@@ -2529,7 +2825,28 @@
       var htmlText;
       var debug = createScanDebug(pageUrl);
 
+      if (Number.isInteger(scanOptions.generation) && scanId !== activeScanId) {
+        addDebugAttempt(debug, {
+          source: "dom-jsonld",
+          status: "superseded",
+          reason: "scan-superseded"
+        });
+        return summarizeScan(null, "dom", "scan-superseded", debug);
+      }
+
       activeScanId = scanId;
+
+      if (
+        scanOptions.expectedRouteKey &&
+        pageRouteKey !== scanOptions.expectedRouteKey
+      ) {
+        addDebugAttempt(debug, {
+          source: "dom-jsonld",
+          status: "superseded",
+          reason: "scan-superseded"
+        });
+        return summarizeScan(null, "dom", "scan-superseded", debug);
+      }
 
       if (!document.body) {
         addDebugAttempt(debug, {
@@ -2541,23 +2858,29 @@
       }
 
       resetInteractionForNewUrl();
-      removeBadge();
-      showNotice("Scanning current page...", "Reading schema.org JobPosting JSON-LD.", {
-        durationMs: 0
-      });
+      renderLoadingBadge();
 
       pageContext = getPageContext(document);
       domSnapshot = scanDocument(document, pageContext);
+      domJsonLdUnchanged =
+        scanOptions.trigger === "navigation" &&
+        jsonLdTextsEqual(domSnapshot.jsonLdTexts, scanOptions.previousJsonLdTexts);
+      if (domJsonLdUnchanged && domSnapshot.result.selected) {
+        domSnapshot = snapshotWithoutSelected(domSnapshot);
+      }
       addDebugAttempt(debug, {
         source: "dom-jsonld",
         status: domSnapshot.result.selected ? "selected" : "no-match",
         snapshot: domSnapshot,
-        reason: domSnapshot.result.selected ? "" : "no-selected-jobposting"
+        reason: domSnapshot.result.selected
+          ? ""
+          : domJsonLdUnchanged
+            ? "unchanged-after-navigation"
+            : "no-selected-jobposting"
       });
 
       if (domSnapshot.result.selected) {
-        renderBadge(domSnapshot.result);
-        return summarizeScan(domSnapshot, "dom", "", debug);
+        return finishSelectedScan(domSnapshot, "dom", debug, pageUrl);
       }
 
       if (
@@ -2580,7 +2903,7 @@
           domSnapshot.jsonLdTexts,
           domSnapshot.readyState
         );
-        showNotice(notice.message, notice.helper);
+        showScanFailure(notice, scanOptions);
         return summarizeScan(domSnapshot, "dom", "", debug);
       }
 
@@ -2598,8 +2921,8 @@
             });
             return summarizeScan(null, "greenhouse-api", "scan-superseded", debug);
           }
-          if (window.location.href !== pageUrl) {
-            removeNotice();
+          if (getRouteKey(window.location.href) !== pageRouteKey) {
+            removeBadge();
             addDebugAttempt(debug, {
               source: "greenhouse-api",
               status: "superseded",
@@ -2619,8 +2942,7 @@
               snapshot: htmlSnapshot,
               lookup: greenhouseLookupDebug.lookup
             });
-            renderBadge(htmlSnapshot.result);
-            return summarizeScan(htmlSnapshot, "greenhouse-api", "", debug);
+            return finishSelectedScan(htmlSnapshot, "greenhouse-api", debug, pageUrl);
           }
 
           addDebugAttempt(debug, {
@@ -2630,9 +2952,8 @@
             snapshot: htmlSnapshot,
             lookup: greenhouseLookupDebug.lookup
           });
-          removeBadge();
           notice = getGreenhouseNoResultNotice();
-          showNotice(notice.message, notice.helper, { persistent: true });
+          showScanFailure(notice, scanOptions);
           return summarizeScan(htmlSnapshot, "greenhouse-api", "greenhouse-no-match", debug);
         } catch (error) {
           if (scanId !== activeScanId) {
@@ -2644,8 +2965,8 @@
             });
             return summarizeScan(null, "greenhouse-api", "scan-superseded", debug);
           }
-          if (window.location.href !== pageUrl) {
-            removeNotice();
+          if (getRouteKey(window.location.href) !== pageRouteKey) {
+            removeBadge();
             addDebugAttempt(debug, {
               source: "greenhouse-api",
               status: "superseded",
@@ -2686,8 +3007,8 @@
             });
             return summarizeScan(null, "ashby-jsonld", "scan-superseded", debug);
           }
-          if (window.location.href !== pageUrl) {
-            removeNotice();
+          if (getRouteKey(window.location.href) !== pageRouteKey) {
+            removeBadge();
             addDebugAttempt(debug, {
               source: "ashby-jsonld",
               status: "superseded",
@@ -2705,8 +3026,7 @@
               snapshot: htmlSnapshot,
               lookup: ashbyLookupDebug.lookup
             });
-            renderBadge(htmlSnapshot.result);
-            return summarizeScan(htmlSnapshot, "ashby-jsonld", "", debug);
+            return finishSelectedScan(htmlSnapshot, "ashby-jsonld", debug, pageUrl);
           }
 
           addDebugAttempt(debug, {
@@ -2726,8 +3046,8 @@
             });
             return summarizeScan(null, "ashby-jsonld", "scan-superseded", debug);
           }
-          if (window.location.href !== pageUrl) {
-            removeNotice();
+          if (getRouteKey(window.location.href) !== pageRouteKey) {
+            removeBadge();
             addDebugAttempt(debug, {
               source: "ashby-jsonld",
               status: "superseded",
@@ -2773,8 +3093,8 @@
             });
             return summarizeScan(null, "yc-jsonld", "scan-superseded", debug);
           }
-          if (window.location.href !== pageUrl) {
-            removeNotice();
+          if (getRouteKey(window.location.href) !== pageRouteKey) {
+            removeBadge();
             addDebugAttempt(debug, {
               source: "yc-jsonld",
               status: "superseded",
@@ -2792,8 +3112,7 @@
               snapshot: htmlSnapshot,
               lookup: ycLookupDebug
             });
-            renderBadge(htmlSnapshot.result);
-            return summarizeScan(htmlSnapshot, "yc-jsonld", "", debug);
+            return finishSelectedScan(htmlSnapshot, "yc-jsonld", debug, pageUrl);
           }
 
           htmlSnapshot = snapshotWithoutSelected(htmlSnapshot);
@@ -2804,9 +3123,8 @@
             snapshot: htmlSnapshot,
             lookup: ycLookupDebug
           });
-          removeBadge();
           notice = getHtmlFallbackNoResultNotice();
-          showNotice(notice.message, notice.helper, { persistent: true });
+          showScanFailure(notice, scanOptions);
           return summarizeScan(htmlSnapshot, "yc-jsonld", "yc-jsonld-no-match", debug);
         } catch (error) {
           if (scanId !== activeScanId) {
@@ -2818,8 +3136,8 @@
             });
             return summarizeScan(null, "yc-jsonld", "scan-superseded", debug);
           }
-          if (window.location.href !== pageUrl) {
-            removeNotice();
+          if (getRouteKey(window.location.href) !== pageRouteKey) {
+            removeBadge();
             addDebugAttempt(debug, {
               source: "yc-jsonld",
               status: "superseded",
@@ -2836,9 +3154,8 @@
             lookup: ycLookupDebug,
             error: error
           });
-          removeBadge();
           notice = getHtmlFallbackNoResultNotice();
-          showNotice(notice.message, notice.helper, { persistent: true });
+          showScanFailure(notice, scanOptions);
           return summarizeScan(domSnapshot, "yc-jsonld", "yc-jsonld-no-match", debug);
         }
       } else {
@@ -2865,8 +3182,8 @@
           });
           return summarizeScan(null, "html", "scan-superseded", debug);
         }
-        if (window.location.href !== pageUrl) {
-          removeNotice();
+        if (getRouteKey(window.location.href) !== pageRouteKey) {
+          removeBadge();
           addDebugAttempt(debug, {
             source: "html-fallback",
             status: "superseded",
@@ -2884,8 +3201,7 @@
             snapshot: htmlSnapshot,
             lookup: { url: fallbackUrl }
           });
-          renderBadge(htmlSnapshot.result);
-          return summarizeScan(htmlSnapshot, "html", "", debug);
+          return finishSelectedScan(htmlSnapshot, "html", debug, pageUrl);
         }
 
         addDebugAttempt(debug, {
@@ -2895,9 +3211,8 @@
           snapshot: htmlSnapshot,
           lookup: { url: fallbackUrl }
         });
-        removeBadge();
         notice = getHtmlFallbackNoResultNotice();
-        showNotice(notice.message, notice.helper, { persistent: true });
+        showScanFailure(notice, scanOptions);
         return summarizeScan(htmlSnapshot, "html", "html-no-match", debug);
       } catch (error) {
         if (scanId !== activeScanId) {
@@ -2909,8 +3224,8 @@
           });
           return summarizeScan(null, "html", "scan-superseded", debug);
         }
-        if (window.location.href !== pageUrl) {
-          removeNotice();
+        if (getRouteKey(window.location.href) !== pageRouteKey) {
+          removeBadge();
           addDebugAttempt(debug, {
             source: "html-fallback",
             status: "superseded",
@@ -2927,11 +3242,16 @@
           lookup: { url: fallbackUrl },
           error: error
         });
-        removeBadge();
         notice = getHtmlFetchFailureNotice(error);
-        showNotice(notice.message, notice.helper, { persistent: true });
+        showScanFailure(notice, scanOptions);
         return summarizeScan(domSnapshot, "dom", "html-fetch-failed", debug);
       }
+    }
+
+    function scanOnce() {
+      pendingNavigation = null;
+      cancelPendingAnimationFrame();
+      return scanPage({ trigger: "manual" });
     }
 
     window.JobDateLens = Object.assign({}, api, {
