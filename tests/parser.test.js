@@ -209,7 +209,7 @@ test("handles @graph JSON-LD", () => {
   assert.equal(result.selected.title, "Platform Engineer");
 });
 
-test("selects the best matching JobPosting when multiple candidates exist", () => {
+test("rejects multiple JobPosting candidates instead of guessing", () => {
   const result = scan(
     json([
       jobPosting({
@@ -224,10 +224,26 @@ test("selects the best matching JobPosting when multiple candidates exist", () =
       jobPosting()
     ])
   );
+  const notice = jobDateLens.getNoResultNotice(result, ["json-ld"], "complete");
 
   assert.equal(result.candidates.length, 2);
-  assert.equal(result.selected.title, "Senior Product Manager");
-  assert.equal(result.selected.company, "Acme Analytics");
+  assert.equal(result.selected, null);
+  assert.equal(result.selectionReason, "multiple-jobpostings");
+  assert.equal(result.ambiguousCandidates.length, 2);
+  assert.deepEqual(notice, {
+    message: "Multiple job entries found",
+    helper:
+      "This page exposes more than one JobPosting, so JobDateLens can’t safely choose one."
+  });
+});
+
+test("treats duplicate JobPosting objects as ambiguous", () => {
+  const duplicate = jobPosting();
+  const result = scan(json([duplicate, duplicate]));
+
+  assert.equal(result.candidates.length, 2);
+  assert.equal(result.selected, null);
+  assert.equal(result.selectionReason, "multiple-jobpostings");
 });
 
 test("does not select stale JobPosting JSON-LD from a previous SPA route", () => {
@@ -338,108 +354,81 @@ test("accepts direct-loaded Ashby-style JobPosting JSON-LD without validThrough"
   assert.equal(model.status.label, "No expiry");
 });
 
-test("accepts current JobPosting JSON-LD when heading and page title are generic", () => {
+test("matches the complete normalized visible heading without fuzzy overlap", () => {
   const result = scan(
     json(
       jobPosting({
-        title: "Software Engineer, Singapore",
+        title: "C++ Engineer (Platform)",
         datePosted: "2026-06-17",
-        validThrough: undefined,
-        hiringOrganization: {
-          "@type": "Organization",
-          name: "Codex"
-        }
+        validThrough: undefined
       })
     ),
     {
-      title: "Careers | Codex",
-      heading: "Job details",
-      visibleText:
-        "Software Engineer, Singapore Codex Engineering This is a full-stack role in Singapore."
+      title: "Unrelated browser tab title",
+      heading: "  c++ engineer — platform  ",
+      visibleText: "Body text is not part of title verification."
+    }
+  );
+  const stale = scan(
+    json(jobPosting({ title: "Forward Deployed Engineer (New Grad)" })),
+    {
+      title: "Forward Deployed Engineer (New Grad)",
+      heading: "Forward Deployed Engineer, London",
+      visibleText: "Forward Deployed Engineer New Grad London"
     }
   );
 
-  assert.equal(result.candidates.length, 1);
+  assert.equal(result.selected.title, "C++ Engineer (Platform)");
   assert.equal(result.staleCandidates.length, 0);
-  assert.equal(result.selected.title, "Software Engineer, Singapore");
+  assert.equal(stale.selected, null);
+  assert.equal(stale.selectionReason, "title-mismatch");
+  assert.equal(stale.staleCandidates.length, 1);
 });
 
-test("accepts current JobPosting JSON-LD when page title starts with a brand", () => {
-  const result = scan(
-    json(
-      jobPosting({
-        title: "Software Engineer",
-        datePosted: "2026-06-17",
-        validThrough: undefined,
-        hiringOrganization: {
-          "@type": "Organization",
-          name: "Acme Analytics"
-        }
-      })
-    ),
-    {
-      title: "Acme Analytics | Careers",
-      heading: "Job details",
-      visibleText: "Software Engineer Acme Analytics Engineering role"
-    }
+test("preserves meaningful plus and hash title symbols", () => {
+  assert.equal(jobDateLens.normalizeJobTitle("C++ Engineer"), "c++ engineer");
+  assert.equal(jobDateLens.normalizeJobTitle("C# Engineer"), "c# engineer");
+  assert.equal(jobDateLens.normalizeJobTitle("C Engineer"), "c engineer");
+  assert.notEqual(
+    jobDateLens.normalizeJobTitle("C++ Engineer"),
+    jobDateLens.normalizeJobTitle("C Engineer")
   );
-
-  assert.equal(result.candidates.length, 1);
-  assert.equal(result.staleCandidates.length, 0);
-  assert.equal(result.selected.title, "Software Engineer");
+  assert.notEqual(
+    jobDateLens.normalizeJobTitle("C# Engineer"),
+    jobDateLens.normalizeJobTitle("C Engineer")
+  );
 });
 
-test("accepts current JobPosting JSON-LD when heading is open positions", () => {
+test("does not let a generic or missing heading verify live JobPosting data", () => {
+  const jsonLdText = json(
+    jobPosting({
+      title: "Software Engineer",
+      datePosted: "2026-06-17",
+      validThrough: undefined
+    })
+  );
   const result = scan(
-    json(
-      jobPosting({
-        title: "Software Engineer",
-        datePosted: "2026-06-17",
-        validThrough: undefined,
-        hiringOrganization: {
-          "@type": "Organization",
-          name: "Codex"
-        }
-      })
-    ),
+    jsonLdText,
     {
-      title: "Careers | Codex",
-      heading: "Open Positions",
+      title: "Software Engineer at Codex",
+      heading: "Job details",
       visibleText: "Software Engineer Codex Engineering role"
     }
   );
+  const missingHeading = scan(jsonLdText, {
+    title: "Software Engineer at Codex",
+    heading: "",
+    visibleText: "Software Engineer Codex Engineering role"
+  });
 
-  assert.equal(result.candidates.length, 1);
-  assert.equal(result.staleCandidates.length, 0);
-  assert.equal(result.selected.title, "Software Engineer");
+  assert.equal(result.selected, null);
+  assert.equal(result.selectionReason, "generic-heading");
+  assert.equal(result.unverifiedCandidates.length, 1);
+  assert.equal(missingHeading.selected, null);
+  assert.equal(missingHeading.selectionReason, "missing-heading");
 });
 
-test("accepts current JobPosting JSON-LD when heading is join our team", () => {
-  const result = scan(
-    json(
-      jobPosting({
-        title: "Software Engineer",
-        datePosted: "2026-06-17",
-        validThrough: undefined,
-        hiringOrganization: {
-          "@type": "Organization",
-          name: "Codex"
-        }
-      })
-    ),
-    {
-      title: "Careers | Codex",
-      heading: "Join Our Team",
-      visibleText: "Software Engineer Codex Engineering role"
-    }
-  );
-
-  assert.equal(result.candidates.length, 1);
-  assert.equal(result.staleCandidates.length, 0);
-  assert.equal(result.selected.title, "Software Engineer");
-});
-
-test("does not reject JobPosting JSON-LD from page title alone when heading is generic", () => {
+test("trusts exactly one current-URL JobPosting without consulting the live heading", () => {
   const jsonLdText = json(
     jobPosting({
       title: "Sales Lead, Hong Kong",
@@ -451,11 +440,15 @@ test("does not reject JobPosting JSON-LD from page title alone when heading is g
       }
     })
   );
-  const result = scan(jsonLdText, {
-    title: "Software Engineer, Singapore @ Codex",
-    heading: "Job details",
-    visibleText: "Software Engineer, Singapore Codex Engineering"
-  });
+  const result = jobDateLens.scanJsonLdTexts(
+    [jsonLdText],
+    {
+      title: "Software Engineer, Singapore @ Codex",
+      heading: "Job details",
+      visibleText: "Software Engineer, Singapore Codex Engineering"
+    },
+    "trusted"
+  );
 
   assert.equal(result.candidates.length, 1);
   assert.equal(result.staleCandidates.length, 0);

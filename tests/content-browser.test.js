@@ -741,6 +741,176 @@ test("a technical failure keeps watching for the next same-document job", async 
   assert.equal(fetchCalls, 1);
 });
 
+test("first activation uses fresh data and blocks same-title stale DOM on manual rescans", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const pageUrl = "https://example.com/jobs/software-engineer";
+  const title = "Software Engineer";
+  const html = "fresh-same-title-job-html";
+  const staleJsonLd = createJobPostingJsonLd(title, "2026-01-01");
+  const freshJsonLd = createJobPostingJsonLd(title, "2026-07-22");
+  const document = createFakeDocument();
+  const requests = [];
+
+  setFakeJobPage(document, title, { jsonLdText: staleJsonLd });
+  const fakeWindow = {
+    location: { href: pageUrl },
+    setTimeout,
+    clearTimeout,
+    fetch(url) {
+      requests.push(url);
+      return Promise.resolve({
+        ok: true,
+        text() {
+          return Promise.resolve(html);
+        }
+      });
+    }
+  };
+  const context = vm.createContext({
+    console,
+    document,
+    DOMParser: createMappedDomParser({
+      [html]: { title, jsonLdText: freshJsonLd }
+    }),
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+
+  const firstResult = await fakeWindow.JobDateLens.scanOnce();
+  const repeatedResult = await fakeWindow.JobDateLens.scanOnce();
+
+  assert.equal(firstResult.source, "html");
+  assert.equal(repeatedResult.source, "html");
+  assert.deepEqual(requests, [pageUrl, pageUrl]);
+  assert.equal(
+    repeatedResult.debug.attempts.find((attempt) => attempt.source === "dom-jsonld").reason,
+    "unchanged-after-navigation"
+  );
+
+  setFakeJobPage(document, title, { jsonLdText: freshJsonLd });
+  const updatedDomResult = await fakeWindow.JobDateLens.scanOnce();
+
+  assert.equal(updatedDomResult.source, "dom");
+  assert.deepEqual(requests, [pageUrl, pageUrl]);
+});
+
+test("fresh failure falls back to verified live DOM and Close makes reopening fresh-first", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const pageUrl = "https://example.com/jobs/platform-engineer";
+  const title = "Platform Engineer";
+  const document = createFakeDocument();
+  let fetchCalls = 0;
+
+  setFakeJobPage(document, title, {
+    jsonLdText: createJobPostingJsonLd(title, "2026-07-22")
+  });
+  const fakeWindow = {
+    location: { href: pageUrl },
+    setTimeout,
+    clearTimeout,
+    fetch() {
+      fetchCalls += 1;
+      return Promise.reject(new Error("Network unavailable"));
+    }
+  };
+  const context = vm.createContext({ console, document, URL, window: fakeWindow });
+
+  vm.runInContext(source, context);
+
+  const firstResult = await fakeWindow.JobDateLens.scanOnce();
+  const sameSessionResult = await fakeWindow.JobDateLens.scanOnce();
+
+  assert.equal(firstResult.source, "dom");
+  assert.equal(firstResult.found, true);
+  assert.equal(sameSessionResult.source, "dom");
+  assert.equal(fetchCalls, 1);
+
+  findButtonByTitle(
+    document.getElementById("jobdatelens-badge"),
+    "Close JobDateLens"
+  ).click();
+  const reopenedResult = await fakeWindow.JobDateLens.scanOnce();
+
+  assert.equal(reopenedResult.source, "dom");
+  assert.equal(reopenedResult.found, true);
+  assert.equal(fetchCalls, 2);
+});
+
+test("generic headings and multiple JobPostings remain failures when fresh data cannot resolve them", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const genericUrl = "https://example.com/jobs/generic-heading";
+  const multipleUrl = "https://example.com/jobs/ambiguous";
+  const emptyHtml = "generic-empty-html";
+  const multipleHtml = "multiple-jobposting-html";
+  const title = "Software Engineer";
+  const firstPosting = createJobPostingJsonLd(title, "2026-07-01");
+  const secondPosting = createJobPostingJsonLd("Product Engineer", "2026-07-02");
+  const multipleJsonLd = JSON.stringify([
+    JSON.parse(firstPosting),
+    JSON.parse(secondPosting)
+  ]);
+
+  async function runFailure(pageUrl, heading, liveJsonLd, html, freshJsonLd) {
+    const document = createFakeDocument();
+
+    setFakeJobPage(document, heading, { jsonLdText: liveJsonLd });
+    const fakeWindow = {
+      location: { href: pageUrl },
+      setTimeout,
+      clearTimeout,
+      fetch() {
+        return Promise.resolve({
+          ok: true,
+          text() {
+            return Promise.resolve(html);
+          }
+        });
+      }
+    };
+    const context = vm.createContext({
+      console,
+      document,
+      DOMParser: createMappedDomParser({
+        [html]: { title: heading, jsonLdText: freshJsonLd }
+      }),
+      URL,
+      window: fakeWindow
+    });
+
+    vm.runInContext(source, context);
+    const result = await fakeWindow.JobDateLens.scanOnce();
+    return { document, result };
+  }
+
+  const generic = await runFailure(
+    genericUrl,
+    "Job details",
+    firstPosting,
+    emptyHtml,
+    ""
+  );
+  assert.equal(generic.result.found, false);
+  assert.match(
+    getElementText(generic.document.getElementById("jobdatelens-badge")),
+    /Structured job data could not be verified/
+  );
+
+  const multiple = await runFailure(
+    multipleUrl,
+    title,
+    multipleJsonLd,
+    multipleHtml,
+    multipleJsonLd
+  );
+  assert.equal(multiple.result.found, false);
+  assert.match(
+    getElementText(multiple.document.getElementById("jobdatelens-badge")),
+    /Multiple job entries found/
+  );
+});
+
 test("Ashby SPA navigation and later manual scans reject route-proven stale JSON-LD", async () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   const routeA =
@@ -749,6 +919,7 @@ test("Ashby SPA navigation and later manual scans reject route-proven stale JSON
     "https://jobs.ashbyhq.com/meticulous/9b592dc5-6262-42ff-bbd7-f1b2ae8e7543";
   const titleA = "Forward Deployed Engineer (New Grad)";
   const titleB = "Forward Deployed Engineer, London";
+  const htmlA = "ashby-job-a-html";
   const htmlB = "ashby-job-b-html";
   const jsonLdA = createJobPostingJsonLd(titleA, "2026-06-01");
   const jsonLdB = createJobPostingJsonLd(titleB, "2026-07-02");
@@ -776,7 +947,7 @@ test("Ashby SPA navigation and later manual scans reject route-proven stale JSON
       return Promise.resolve({
         ok: true,
         text() {
-          return Promise.resolve(htmlB);
+          return Promise.resolve(url === routeA ? htmlA : htmlB);
         }
       });
     }
@@ -785,6 +956,7 @@ test("Ashby SPA navigation and later manual scans reject route-proven stale JSON
     console,
     document,
     DOMParser: createMappedDomParser({
+      [htmlA]: { title: titleA, jsonLdText: jsonLdA },
       [htmlB]: { title: titleB, jsonLdText: jsonLdB }
     }),
     URL,
@@ -796,7 +968,7 @@ test("Ashby SPA navigation and later manual scans reject route-proven stale JSON
 
   const directRepeat = await fakeWindow.JobDateLens.scanOnce();
   assert.equal(directRepeat.source, "dom");
-  assert.deepEqual(currentPageRequests, []);
+  assert.deepEqual(currentPageRequests, [routeA]);
 
   let badge = document.getElementById("jobdatelens-badge");
   findButtonByTitle(badge, "Collapse JobDateLens").click();
@@ -821,7 +993,7 @@ test("Ashby SPA navigation and later manual scans reject route-proven stale JSON
   navigation.dispatch("navigatesuccess");
 
   assert.equal(frames.pendingCount(), 1);
-  assert.equal(currentPageRequests.length, 0);
+  assert.equal(currentPageRequests.length, 1);
   assert.equal(frames.runNext(), true);
   await flushAsyncWork();
 
@@ -829,7 +1001,7 @@ test("Ashby SPA navigation and later manual scans reject route-proven stale JSON
   const debug = fakeWindow.JobDateLens.getLastScanDebug();
   const domAttempt = debug.attempts.find((attempt) => attempt.source === "dom-jsonld");
 
-  assert.deepEqual(currentPageRequests, [routeB]);
+  assert.deepEqual(currentPageRequests, [routeA, routeB]);
   assert.equal(domAttempt.status, "no-match");
   assert.equal(domAttempt.reason, "unchanged-after-navigation");
   assert.equal(badge.attributes["aria-busy"], "false");
@@ -848,7 +1020,7 @@ test("Ashby SPA navigation and later manual scans reject route-proven stale JSON
   badge = document.getElementById("jobdatelens-badge");
 
   assert.equal(firstManualResult.source, "html");
-  assert.deepEqual(currentPageRequests, [routeB, routeB]);
+  assert.deepEqual(currentPageRequests, [routeA, routeB, routeB]);
   assert.match(getElementText(badge), new RegExp(titleB));
   assert.ok(!getElementText(badge).includes(titleA));
   assert.equal(
@@ -861,7 +1033,7 @@ test("Ashby SPA navigation and later manual scans reject route-proven stale JSON
   const secondManualResult = await fakeWindow.JobDateLens.scanOnce();
 
   assert.equal(secondManualResult.source, "html");
-  assert.deepEqual(currentPageRequests, [routeB, routeB, routeB]);
+  assert.deepEqual(currentPageRequests, [routeA, routeB, routeB, routeB]);
   assert.match(getElementText(badge), new RegExp(titleB));
   assert.ok(!getElementText(badge).includes(titleA));
 
@@ -869,13 +1041,13 @@ test("Ashby SPA navigation and later manual scans reject route-proven stale JSON
   const updatedDomResult = await fakeWindow.JobDateLens.scanOnce();
 
   assert.equal(updatedDomResult.source, "dom");
-  assert.deepEqual(currentPageRequests, [routeB, routeB, routeB]);
+  assert.deepEqual(currentPageRequests, [routeA, routeB, routeB, routeB]);
   assert.match(getElementText(badge), new RegExp(titleB));
 
   const updatedDomRepeat = await fakeWindow.JobDateLens.scanOnce();
 
   assert.equal(updatedDomRepeat.source, "dom");
-  assert.deepEqual(currentPageRequests, [routeB, routeB, routeB]);
+  assert.deepEqual(currentPageRequests, [routeA, routeB, routeB, routeB]);
 });
 
 test("manual activation shares a pending SPA frame and in-flight route scan", async () => {
@@ -886,7 +1058,10 @@ test("manual activation shares a pending SPA frame and in-flight route scan", as
     "https://jobs.ashbyhq.com/meticulous/9b592dc5-6262-42ff-bbd7-f1b2ae8e7543";
   const titleA = "Forward Deployed Engineer (New Grad)";
   const titleB = "Forward Deployed Engineer, London";
+  const htmlA = "coalesced-ashby-job-a-html";
   const htmlB = "coalesced-ashby-job-b-html";
+  const jsonLdA = createJobPostingJsonLd(titleA, "2026-06-01");
+  const jsonLdB = createJobPostingJsonLd(titleB, "2026-07-02");
   const document = createFakeDocument();
   const navigation = createFakeNavigation(routeA);
   const frames = createAnimationFrameHarness();
@@ -894,7 +1069,7 @@ test("manual activation shares a pending SPA frame and in-flight route scan", as
   let resolveFetch;
 
   setFakeJobPage(document, titleA, {
-    jsonLdText: createJobPostingJsonLd(titleA, "2026-06-01")
+    jsonLdText: jsonLdA
   });
   const fakeWindow = {
     location: { href: routeA },
@@ -903,8 +1078,16 @@ test("manual activation shares a pending SPA frame and in-flight route scan", as
     cancelAnimationFrame: frames.cancelAnimationFrame,
     setTimeout,
     clearTimeout,
-    fetch() {
+    fetch(url) {
       fetchCalls += 1;
+      if (url === routeA) {
+        return Promise.resolve({
+          ok: true,
+          text() {
+            return Promise.resolve(htmlA);
+          }
+        });
+      }
       return new Promise((resolve) => {
         resolveFetch = () =>
           resolve({
@@ -920,9 +1103,13 @@ test("manual activation shares a pending SPA frame and in-flight route scan", as
     console,
     document,
     DOMParser: createMappedDomParser({
+      [htmlA]: {
+        title: titleA,
+        jsonLdText: jsonLdA
+      },
       [htmlB]: {
         title: titleB,
-        jsonLdText: createJobPostingJsonLd(titleB, "2026-07-02")
+        jsonLdText: jsonLdB
       }
     }),
     URL,
@@ -946,15 +1133,15 @@ test("manual activation shares a pending SPA frame and in-flight route scan", as
 
   assert.strictEqual(duplicatePendingFrameScan, pendingFrameScan);
   assert.equal(frames.pendingCount(), 1);
-  assert.equal(fetchCalls, 0);
+  assert.equal(fetchCalls, 1);
 
   assert.equal(frames.runNext(), true);
   await flushAsyncWork();
-  assert.equal(fetchCalls, 1);
+  assert.equal(fetchCalls, 2);
 
   const inFlightScan = fakeWindow.JobDateLens.scanOnce();
   assert.strictEqual(inFlightScan, pendingFrameScan);
-  assert.equal(fetchCalls, 1);
+  assert.equal(fetchCalls, 2);
 
   resolveFetch();
   const [pendingResult, duplicateResult, inFlightResult] = await Promise.all([
@@ -966,7 +1153,7 @@ test("manual activation shares a pending SPA frame and in-flight route scan", as
   assert.strictEqual(duplicateResult, pendingResult);
   assert.strictEqual(inFlightResult, pendingResult);
   assert.equal(pendingResult.source, "html");
-  assert.equal(fetchCalls, 1);
+  assert.equal(fetchCalls, 2);
   assert.match(
     getElementText(document.getElementById("jobdatelens-badge")),
     new RegExp(titleB)
@@ -981,12 +1168,15 @@ test("manual activation guards a changed route when its Navigation API event was
     "https://jobs.ashbyhq.com/meticulous/9b592dc5-6262-42ff-bbd7-f1b2ae8e7543";
   const titleA = "Forward Deployed Engineer (New Grad)";
   const titleB = "Forward Deployed Engineer, London";
+  const htmlA = "missed-navigation-ashby-job-a-html";
   const htmlB = "missed-navigation-ashby-job-b-html";
+  const jsonLdA = createJobPostingJsonLd(titleA, "2026-06-01");
+  const jsonLdB = createJobPostingJsonLd(titleB, "2026-07-02");
   const document = createFakeDocument();
   const requests = [];
 
   setFakeJobPage(document, titleA, {
-    jsonLdText: createJobPostingJsonLd(titleA, "2026-06-01")
+    jsonLdText: jsonLdA
   });
   const fakeWindow = {
     location: { href: routeA },
@@ -997,7 +1187,7 @@ test("manual activation guards a changed route when its Navigation API event was
       return Promise.resolve({
         ok: true,
         text() {
-          return Promise.resolve(htmlB);
+          return Promise.resolve(url === routeA ? htmlA : htmlB);
         }
       });
     }
@@ -1006,9 +1196,13 @@ test("manual activation guards a changed route when its Navigation API event was
     console,
     document,
     DOMParser: createMappedDomParser({
+      [htmlA]: {
+        title: titleA,
+        jsonLdText: jsonLdA
+      },
       [htmlB]: {
         title: titleB,
-        jsonLdText: createJobPostingJsonLd(titleB, "2026-07-02")
+        jsonLdText: jsonLdB
       }
     }),
     URL,
@@ -1026,7 +1220,7 @@ test("manual activation guards a changed route when its Navigation API event was
   );
 
   assert.equal(result.source, "html");
-  assert.deepEqual(requests, [routeB]);
+  assert.deepEqual(requests, [routeA, routeB]);
   assert.equal(domAttempt.reason, "unchanged-after-navigation");
   assert.match(
     getElementText(document.getElementById("jobdatelens-badge")),
@@ -1112,15 +1306,17 @@ test("rapid SPA navigation cancels old frames and discards late provider results
   const titleA = "Job A";
   const titleC = "Job C";
   const titleD = "Job D";
+  const htmlA = "ashby-job-a-html";
   const htmlC = "ashby-job-c-html";
   const htmlD = "ashby-job-d-html";
+  const jsonLdA = createJobPostingJsonLd(titleA, "2026-06-01");
   const document = createFakeDocument();
   const navigation = createFakeNavigation(routeA);
   const frames = createAnimationFrameHarness();
   const pendingResponses = [];
 
   setFakeJobPage(document, titleA, {
-    jsonLdText: createJobPostingJsonLd(titleA, "2026-06-01")
+    jsonLdText: jsonLdA
   });
   const fakeWindow = {
     location: { href: routeA },
@@ -1130,6 +1326,14 @@ test("rapid SPA navigation cancels old frames and discards late provider results
     setTimeout,
     clearTimeout,
     fetch(url) {
+      if (url === routeA) {
+        return Promise.resolve({
+          ok: true,
+          text() {
+            return Promise.resolve(htmlA);
+          }
+        });
+      }
       return new Promise((resolve) => {
         pendingResponses.push({ url, resolve });
       });
@@ -1139,6 +1343,10 @@ test("rapid SPA navigation cancels old frames and discards late provider results
     console,
     document,
     DOMParser: createMappedDomParser({
+      [htmlA]: {
+        title: titleA,
+        jsonLdText: jsonLdA
+      },
       [htmlC]: {
         title: titleC,
         jsonLdText: createJobPostingJsonLd(titleC, "2026-07-03")
@@ -1223,15 +1431,18 @@ test("failed SPA refresh offers one user-triggered Retry and keeps Close availab
     "https://jobs.ashbyhq.com/meticulous/18ab8f7f-e950-4f8d-a525-9e21c7f8940d";
   const titleA = "Initial Job";
   const titleB = "Recovered Job";
+  const htmlA = "ashby-initial-html";
   const emptyHtml = "ashby-empty-html";
   const validHtml = "ashby-retry-html";
+  const jsonLdA = createJobPostingJsonLd(titleA, "2026-06-01");
   const document = createFakeDocument();
   const navigation = createFakeNavigation(routeA);
   const frames = createAnimationFrameHarness();
   let fetchCalls = 0;
+  let routeBFetchCalls = 0;
 
   setFakeJobPage(document, titleA, {
-    jsonLdText: createJobPostingJsonLd(titleA, "2026-06-01")
+    jsonLdText: jsonLdA
   });
   const fakeWindow = {
     location: { href: routeA },
@@ -1240,12 +1451,21 @@ test("failed SPA refresh offers one user-triggered Retry and keeps Close availab
     cancelAnimationFrame: frames.cancelAnimationFrame,
     setTimeout,
     clearTimeout,
-    fetch() {
+    fetch(url) {
       fetchCalls += 1;
+      if (url === routeA) {
+        return Promise.resolve({
+          ok: true,
+          text() {
+            return Promise.resolve(htmlA);
+          }
+        });
+      }
+      routeBFetchCalls += 1;
       return Promise.resolve({
         ok: true,
         text() {
-          return Promise.resolve(fetchCalls === 1 ? emptyHtml : validHtml);
+          return Promise.resolve(routeBFetchCalls === 1 ? emptyHtml : validHtml);
         }
       });
     }
@@ -1254,6 +1474,7 @@ test("failed SPA refresh offers one user-triggered Retry and keeps Close availab
     console,
     document,
     DOMParser: createMappedDomParser({
+      [htmlA]: { title: titleA, jsonLdText: jsonLdA },
       [emptyHtml]: { title: titleB, jsonLdText: "" },
       [validHtml]: {
         title: titleB,
@@ -1279,7 +1500,8 @@ test("failed SPA refresh offers one user-triggered Retry and keeps Close availab
   await flushAsyncWork();
 
   let badge = document.getElementById("jobdatelens-badge");
-  assert.equal(fetchCalls, 1);
+  assert.equal(fetchCalls, 2);
+  assert.equal(routeBFetchCalls, 1);
   assert.equal(badge.attributes["aria-busy"], "false");
   assert.match(getElementText(badge), /Couldn’t load job dates/);
   assert.match(getElementText(badge), /Structured job data looks stale/);
@@ -1291,11 +1513,13 @@ test("failed SPA refresh offers one user-triggered Retry and keeps Close availab
   retryButton.click();
   badge = document.getElementById("jobdatelens-badge");
   assert.equal(badge.attributes["aria-busy"], "true");
-  assert.equal(fetchCalls, 2);
+  assert.equal(fetchCalls, 3);
+  assert.equal(routeBFetchCalls, 2);
   await flushAsyncWork();
 
   badge = document.getElementById("jobdatelens-badge");
-  assert.equal(fetchCalls, 2);
+  assert.equal(fetchCalls, 3);
+  assert.equal(routeBFetchCalls, 2);
   assert.equal(badge.attributes["aria-busy"], "false");
   assert.match(getElementText(badge), new RegExp(titleB));
   assert.equal(findButtonByText(badge, "Retry"), null);
