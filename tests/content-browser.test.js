@@ -1004,6 +1004,201 @@ test("every manual activation uses fresh data instead of same-title live DOM", a
   assert.deepEqual(requests, [pageUrl, pageUrl, pageUrl]);
 });
 
+test("a page-load scan finishes from attested live DOM without fetching", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const pageUrl = "https://example.com/jobs/platform-engineer";
+  const title = "Platform Engineer";
+  const html = "page-load-fresh-html";
+  const document = createFakeDocument();
+  const requests = [];
+
+  setFakeJobPage(document, title, {
+    jsonLdText: createJobPostingJsonLd(title, "2026-07-30", "Meticulous", {
+      url: pageUrl
+    })
+  });
+  const fakeWindow = {
+    location: { href: pageUrl },
+    setTimeout,
+    clearTimeout,
+    fetch(url) {
+      requests.push(url);
+      return Promise.resolve({
+        ok: true,
+        text() {
+          return Promise.resolve(html);
+        }
+      });
+    }
+  };
+  const context = vm.createContext({
+    console,
+    document,
+    DOMParser: createMappedDomParser({
+      [html]: {
+        title,
+        jsonLdText: createJobPostingJsonLd(title, "2026-07-30")
+      }
+    }),
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+
+  const pageLoadResult = await fakeWindow.JobDateLens.scanOnce({
+    trigger: "page-load"
+  });
+  const domAttempts = pageLoadResult.debug.attempts.filter(
+    (attempt) => attempt.source === "dom-jsonld"
+  );
+
+  assert.equal(pageLoadResult.found, true);
+  assert.equal(pageLoadResult.source, "dom");
+  assert.deepEqual(requests, []);
+  assert.equal(domAttempts.length, 1);
+  assert.equal(domAttempts[0].phase, "page-load-fast-path");
+  assert.equal(domAttempts[0].status, "selected");
+  assert.equal(domAttempts[0].reason, "route-identity-matched");
+  assert.match(
+    getElementText(document.getElementById("jobdatelens-badge")),
+    new RegExp(title)
+  );
+
+  const clickHandlerResult = await fakeWindow.JobDateLens.scanOnce({
+    type: "click"
+  });
+
+  assert.equal(clickHandlerResult.source, "html");
+  assert.deepEqual(requests, [pageUrl]);
+});
+
+test("page-load scans without live route proof fall back to fresh data", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const title = "Current Route Engineer";
+  const cases = [
+    {
+      name: "missing-route-identity",
+      reason: "route-identity-missing",
+      liveJsonLd(routeUrl) {
+        return createJobPostingJsonLd(title, "2026-01-01");
+      }
+    },
+    {
+      name: "title-mismatch",
+      reason: "title-mismatch",
+      liveJsonLd(routeUrl) {
+        return createJobPostingJsonLd(
+          "Previous Route Engineer",
+          "2026-01-01",
+          "Meticulous",
+          { url: routeUrl }
+        );
+      }
+    }
+  ];
+
+  for (const testCase of cases) {
+    const pageUrl = `https://careers.example.com/${testCase.name}/job`;
+    const html = `${testCase.name}-page-load-html`;
+    const document = createFakeDocument();
+    const requests = [];
+
+    setFakeJobPage(document, title, {
+      jsonLdText: testCase.liveJsonLd(pageUrl)
+    });
+    const fakeWindow = {
+      location: { href: pageUrl },
+      setTimeout,
+      clearTimeout,
+      fetch(url) {
+        requests.push(url);
+        return Promise.resolve({
+          ok: true,
+          text() {
+            return Promise.resolve(html);
+          }
+        });
+      }
+    };
+    const context = vm.createContext({
+      console,
+      document,
+      DOMParser: createMappedDomParser({
+        [html]: {
+          title,
+          jsonLdText: createJobPostingJsonLd(title, "2026-07-30")
+        }
+      }),
+      URL,
+      window: fakeWindow
+    });
+
+    vm.runInContext(source, context);
+
+    const result = await fakeWindow.JobDateLens.scanOnce({
+      trigger: "page-load"
+    });
+    const domAttempts = result.debug.attempts.filter(
+      (attempt) => attempt.source === "dom-jsonld"
+    );
+
+    assert.equal(result.found, true, testCase.name);
+    assert.equal(result.source, "html", testCase.name);
+    assert.deepEqual(requests, [pageUrl], testCase.name);
+    assert.equal(domAttempts.length, 1, testCase.name);
+    assert.equal(domAttempts[0].phase, "page-load-fast-path", testCase.name);
+    assert.equal(domAttempts[0].reason, testCase.reason, testCase.name);
+  }
+});
+
+test("Greenhouse page-load scans stay API-first", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const pageUrl = "https://job-boards.greenhouse.io/pallet/jobs/5169663007";
+  const apiUrl = "https://boards-api.greenhouse.io/v1/boards/pallet/jobs/5169663007";
+  const title = "Forward Deployed Product Engineer";
+  const document = createFakeDocument();
+  const requests = [];
+
+  setFakeJobPage(document, title, {
+    jsonLdText: createJobPostingJsonLd(title, "2026-06-01", "Pallet", {
+      url: pageUrl
+    })
+  });
+  const fakeWindow = {
+    location: { href: pageUrl },
+    setTimeout,
+    clearTimeout,
+    fetch(url) {
+      requests.push(url);
+      return Promise.resolve({
+        ok: true,
+        url,
+        json() {
+          return Promise.resolve({
+            title,
+            company_name: "Pallet",
+            first_published: "2026-06-19T12:45:42-04:00"
+          });
+        }
+      });
+    }
+  };
+  const context = vm.createContext({ console, document, URL, window: fakeWindow });
+
+  vm.runInContext(source, context);
+
+  const result = await fakeWindow.JobDateLens.scanOnce({ trigger: "page-load" });
+
+  assert.equal(result.found, true);
+  assert.equal(result.source, "greenhouse-api");
+  assert.deepEqual(requests, [apiUrl]);
+  assert.equal(
+    result.debug.attempts.find((attempt) => attempt.source === "dom-jsonld"),
+    undefined
+  );
+});
+
 test("fresh current-URL data does not require a matching live primary heading", async () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   const title = "Current Route Engineer";

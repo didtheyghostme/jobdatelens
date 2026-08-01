@@ -488,8 +488,8 @@ test("manual activation stores a minimal tab session before scanning a no-data p
   const scans = [];
   const controller = background.createSameOriginSessionController(chromeApi, {
     createToken: () => "session-17",
-    scanTab: async (scannedTab) => {
-      scans.push(scannedTab.url);
+    scanTab: async (scannedTab, trigger) => {
+      scans.push({ url: scannedTab.url, trigger });
       return { found: false, reason: "html-no-match" };
     }
   });
@@ -498,7 +498,7 @@ test("manual activation stores a minimal tab session before scanning a no-data p
   const key = background.getSessionStorageKey(tab.id);
 
   assert.equal(result.found, false);
-  assert.deepEqual(scans, [tab.url]);
+  assert.deepEqual(scans, [{ url: tab.url, trigger: "manual" }]);
   assert.deepEqual(chromeApi.values[key], {
     origin: "https://careers.example.com",
     sessionToken: "session-17",
@@ -576,8 +576,8 @@ test("a recreated worker follows same-origin full loads from storage.session", a
   const scans = [];
   const restartedController = background.createSameOriginSessionController(chromeApi, {
     createToken: () => "unused-token",
-    scanTab: async (tab) => {
-      scans.push(tab.url);
+    scanTab: async (tab, trigger) => {
+      scans.push({ url: tab.url, trigger });
       return { found: true };
     }
   });
@@ -593,7 +593,7 @@ test("a recreated worker follows same-origin full loads from storage.session", a
   chromeApi.setTab(completeTab);
   await restartedController.handleTabUpdated(tabId, { status: "complete" }, completeTab);
 
-  assert.deepEqual(scans, [completeTab.url]);
+  assert.deepEqual(scans, [{ url: completeTab.url, trigger: "page-load" }]);
   assert.equal(
     chromeApi.values[background.getSessionStorageKey(tabId)].navigationGeneration,
     1

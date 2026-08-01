@@ -487,8 +487,9 @@ async function isJobDateLensInjected(tabId, chromeApi) {
   return Boolean(results && results[0] && results[0].result);
 }
 
-async function scanTab(tab, chromeApi) {
+async function scanTab(tab, chromeApi, trigger) {
   var api = chromeApi || chrome;
+  var scanTrigger = trigger === "page-load" ? "page-load" : "manual";
   var results;
 
   if (!tab || typeof tab.id !== "number" || !isSupportedPageUrl(tab.url)) {
@@ -501,12 +502,13 @@ async function scanTab(tab, chromeApi) {
 
   results = await api.scripting.executeScript({
     target: { tabId: tab.id },
-    func: function () {
+    args: [scanTrigger],
+    func: function (injectedTrigger) {
       if (!window.JobDateLens || typeof window.JobDateLens.scanOnce !== "function") {
         return { found: false, error: "JobDateLens content script was not ready." };
       }
 
-      return window.JobDateLens.scanOnce();
+      return window.JobDateLens.scanOnce({ trigger: injectedTrigger });
     }
   });
 
@@ -518,8 +520,8 @@ function createSameOriginSessionController(chromeApi, options) {
   var tokenFactory = settings.createToken || createSessionToken;
   var tabScanner =
     settings.scanTab ||
-    function (tab) {
-      return scanTab(tab, chromeApi);
+    function (tab, trigger) {
+      return scanTab(tab, chromeApi, trigger);
     };
   var logger = settings.logger || console;
   var transitionChains = new Map();
@@ -673,7 +675,7 @@ function createSameOriginSessionController(chromeApi, options) {
         }
 
         try {
-          result = await tabScanner(tab);
+          result = await tabScanner(tab, "page-load");
         } catch (error) {
           await clearSession(tabId, record);
           if (logger && typeof logger.warn === "function") {
@@ -750,7 +752,7 @@ function createSameOriginSessionController(chromeApi, options) {
     }
 
     try {
-      return await tabScanner(currentTab);
+      return await tabScanner(currentTab, "manual");
     } catch (error) {
       await clearSession(tab.id, record);
       if (logger && typeof logger.warn === "function") {

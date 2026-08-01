@@ -3803,7 +3803,8 @@
       greenhouseLookupDebug = getGreenhouseLookupDebugInfo(document, pageUrl);
       greenhouseLookupRequest = greenhouseLookupDebug.request;
       if (
-        scanOptions.trigger === "navigation" &&
+        (scanOptions.trigger === "navigation" ||
+          scanOptions.trigger === "page-load") &&
         !scanOptions.forceFresh &&
         !greenhouseLookupRequest
       ) {
@@ -3812,7 +3813,9 @@
           pageRouteKey,
           debug,
           pageUrl,
-          "navigation-fast-path"
+          scanOptions.trigger === "page-load"
+            ? "page-load-fast-path"
+            : "navigation-fast-path"
         );
         domSnapshot = liveFallback.snapshot;
         if (domSnapshot.result.selected) {
@@ -4324,7 +4327,12 @@
       }
     }
 
-    function scanOnce() {
+    function scanOnce(options) {
+      // Only an explicit page-load trigger qualifies for the live DOM fast
+      // path; scanOnce is also used as a click handler, where the first
+      // argument is a MouseEvent and the scan must stay fresh-first.
+      var trigger =
+        options && options.trigger === "page-load" ? "page-load" : "manual";
       var routeKey;
       var request;
 
@@ -4349,7 +4357,7 @@
       supersedeActiveRouteScan();
       collapsed = false;
       request = {
-        trigger: "manual",
+        trigger: trigger,
         generation: activeScanId,
         expectedRouteKey: routeKey,
         previousJsonLdTexts: getManualJsonLdGuard(routeKey)
