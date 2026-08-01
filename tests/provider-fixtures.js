@@ -180,7 +180,6 @@ const browserFixtures = [
       source: "greenhouse-api",
       selectedSource: "greenhouse-api",
       attempts: [
-        ["dom-jsonld", "no-match"],
         ["greenhouse-api", "selected"]
       ],
       dateRows: [
@@ -218,7 +217,6 @@ const browserFixtures = [
       source: "greenhouse-api",
       selectedSource: "greenhouse-api",
       attempts: [
-        ["dom-jsonld", "no-match"],
         ["greenhouse-api", "selected"]
       ],
       dateRows: [
@@ -255,7 +253,6 @@ const browserFixtures = [
       source: "greenhouse-api",
       selectedSource: "greenhouse-api",
       attempts: [
-        ["dom-jsonld", "no-match"],
         ["greenhouse-api", "selected"]
       ],
       dateRows: [
@@ -296,7 +293,6 @@ const browserFixtures = [
       source: "greenhouse-api",
       selectedSource: "greenhouse-api",
       attempts: [
-        ["dom-jsonld", "no-match"],
         ["greenhouse-api", "selected"]
       ],
       dateRows: [
@@ -381,7 +377,6 @@ const browserFixtures = [
       source: "ashby-jsonld",
       selectedSource: "ashby-jsonld",
       attempts: [
-        ["dom-jsonld", "no-match"],
         ["greenhouse-api", "skipped"],
         ["ashby-jsonld", "selected"]
       ],
@@ -452,7 +447,6 @@ const browserFixtures = [
       source: "html",
       selectedSource: "html-fallback",
       attempts: [
-        ["dom-jsonld", "no-match"],
         ["greenhouse-api", "skipped"],
         ["yc-jsonld", "skipped"],
         ["html-fallback", "selected"]
@@ -483,6 +477,8 @@ const browserFixtures = [
     },
     background: {
       expectedType: "jobdatelens:fetchYcJobPosting",
+      responseUrl:
+        "https://www.ycombinator.com/companies/ruma-care/jobs/fUj2G2Y-product-engineer",
       htmlText: "<!doctype html><title>YC Job</title>",
       parsedJsonLdTexts: [
         json(
@@ -503,7 +499,6 @@ const browserFixtures = [
       source: "yc-jsonld",
       selectedSource: "yc-jsonld",
       attempts: [
-        ["dom-jsonld", "no-match"],
         ["greenhouse-api", "skipped"],
         ["yc-jsonld", "selected"]
       ],

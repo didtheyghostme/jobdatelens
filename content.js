@@ -296,6 +296,53 @@
     return tokens ? tokens.join(" ") : "";
   }
 
+  function isTrackingQueryParameter(name) {
+    var normalized = String(name || "").toLowerCase();
+
+    return (
+      normalized.indexOf("utm_") === 0 ||
+      normalized === "gclid" ||
+      normalized === "fbclid" ||
+      normalized === "msclkid"
+    );
+  }
+
+  function normalizeJobRouteUrl(value, baseUrl) {
+    var rawValue = String(value || "").trim();
+    var parsed;
+    var trackingKeys = [];
+
+    if (!rawValue) {
+      return null;
+    }
+
+    try {
+      parsed = baseUrl
+        ? new URL(rawValue, String(baseUrl))
+        : new URL(rawValue);
+    } catch (error) {
+      return null;
+    }
+
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+
+    parsed.hash = "";
+    parsed.searchParams.forEach(function (_value, key) {
+      if (isTrackingQueryParameter(key) && trackingKeys.indexOf(key) === -1) {
+        trackingKeys.push(key);
+      }
+    });
+    trackingKeys.forEach(function (key) {
+      parsed.searchParams.delete(key);
+    });
+    parsed.searchParams.sort();
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+
+    return parsed.origin + parsed.pathname + parsed.search;
+  }
+
   function isGenericHeadingSignal(heading) {
     var key = normalizeJobTitle(heading);
     var genericHeadings = {
@@ -445,7 +492,9 @@
     if (
       result.selectionReason === "missing-heading" ||
       result.selectionReason === "generic-heading" ||
-      result.selectionReason === "missing-job-title"
+      result.selectionReason === "missing-job-title" ||
+      result.selectionReason === "route-identity-missing" ||
+      result.selectionReason === "route-identity-mismatch"
     ) {
       return {
         message: "Structured job data could not be verified",
@@ -982,6 +1031,15 @@
     if (config.lookup) {
       attempt.lookup = config.lookup;
     }
+    if (config.phase) {
+      attempt.phase = config.phase;
+    }
+    if (config.routeAttestation) {
+      attempt.routeAttestation = config.routeAttestation;
+    }
+    if (config.response) {
+      attempt.response = config.response;
+    }
     if (config.error) {
       attempt.error = getErrorMessage(config.error);
     }
@@ -1049,8 +1107,91 @@
       });
   }
 
+  function getElementAttribute(element, name) {
+    if (!element) {
+      return null;
+    }
+
+    if (typeof element.getAttribute === "function") {
+      return element.getAttribute(name);
+    }
+
+    if (element.attributes && Object.prototype.hasOwnProperty.call(element.attributes, name)) {
+      return element.attributes[name];
+    }
+
+    return null;
+  }
+
+  function isPrimaryHeadingVisible(element, doc) {
+    var current = element;
+    var view = doc && doc.defaultView;
+    var style;
+
+    if (!view && typeof window !== "undefined") {
+      view = window;
+    }
+
+    while (current && current !== doc) {
+      if (
+        current.hidden ||
+        getElementAttribute(current, "hidden") != null ||
+        String(getElementAttribute(current, "aria-hidden") || "").toLowerCase() === "true"
+      ) {
+        return false;
+      }
+
+      if (view && typeof view.getComputedStyle === "function") {
+        try {
+          style = view.getComputedStyle(current);
+          if (
+            style &&
+            (style.display === "none" ||
+              style.visibility === "hidden" ||
+              style.visibility === "collapse")
+          ) {
+            return false;
+          }
+        } catch (error) {
+          style = null;
+        }
+      }
+
+      current = current.parentElement || current.parentNode || null;
+    }
+
+    return true;
+  }
+
+  function getVisiblePrimaryHeading(doc) {
+    var selector = 'h1, [role="heading"][aria-level="1"]';
+    var candidates = [];
+    var fallbackHeading;
+
+    if (doc && typeof doc.querySelectorAll === "function") {
+      try {
+        candidates = Array.prototype.slice.call(doc.querySelectorAll(selector));
+      } catch (error) {
+        candidates = [];
+      }
+    }
+
+    if (!candidates.length && doc && typeof doc.querySelector === "function") {
+      fallbackHeading = doc.querySelector("h1");
+      if (fallbackHeading) {
+        candidates.push(fallbackHeading);
+      }
+    }
+
+    return (
+      candidates.find(function (candidate) {
+        return isPrimaryHeadingVisible(candidate, doc);
+      }) || null
+    );
+  }
+
   function getPageContext(doc) {
-    var heading = doc.querySelector ? doc.querySelector("h1") : null;
+    var heading = getVisiblePrimaryHeading(doc);
     var bodyText = "";
 
     if (doc.body) {
@@ -1101,14 +1242,15 @@
     );
   }
 
-  function snapshotWithoutSelected(snapshot) {
+  function snapshotWithoutSelected(snapshot, selectionReason) {
     if (!snapshot || !snapshot.result) {
       return snapshot;
     }
 
     return Object.assign({}, snapshot, {
       result: Object.assign({}, snapshot.result, {
-        selected: null
+        selected: null,
+        selectionReason: selectionReason || snapshot.result.selectionReason
       })
     });
   }
@@ -1823,6 +1965,319 @@
     };
   }
 
+  function appendUniqueProviderIdentity(identities, provider, jobId, extra) {
+    var normalizedJobId = String(jobId || "").trim().toLowerCase();
+    var identity;
+    var key;
+
+    if (!provider || !normalizedJobId) {
+      return;
+    }
+
+    identity = Object.assign(
+      {
+        provider: provider,
+        jobId: normalizedJobId
+      },
+      extra || {}
+    );
+    key = identity.provider + ":" + identity.jobId;
+    if (
+      !identities.some(function (existing) {
+        return existing.provider + ":" + existing.jobId === key;
+      })
+    ) {
+      identities.push(identity);
+    }
+  }
+
+  function getLeverRouteIdentity(value) {
+    var canonicalUrl = getCanonicalLeverPostingUrl(value);
+    var pathSegments;
+
+    if (!canonicalUrl) {
+      return null;
+    }
+
+    pathSegments = new URL(canonicalUrl).pathname.split("/").filter(Boolean);
+    return pathSegments.length === 2
+      ? {
+          provider: "lever",
+          jobId: pathSegments[1].toLowerCase(),
+          board: pathSegments[0].toLowerCase()
+        }
+      : null;
+  }
+
+  function getProviderRouteIdentitiesFromUrl(value) {
+    var identities = [];
+    var parsed;
+    var ashbyInfo;
+    var greenhouseLookup;
+    var ycJobId;
+    var leverIdentity;
+
+    try {
+      parsed = new URL(String(value || ""));
+    } catch (error) {
+      return identities;
+    }
+
+    ashbyInfo = getAshbyUrlInfo(parsed.href);
+    if (ashbyInfo && ashbyInfo.jobId) {
+      appendUniqueProviderIdentity(identities, "ashby", ashbyInfo.jobId, {
+        board: ashbyInfo.boardPathSegment.toLowerCase()
+      });
+    }
+    if (parsed.protocol === "https:") {
+      appendUniqueProviderIdentity(
+        identities,
+        "ashby",
+        getAshbyJobIdFromUrl(parsed)
+      );
+    }
+
+    greenhouseLookup = getGreenhouseLookupFromUrl(parsed.href);
+    if (greenhouseLookup && greenhouseLookup.jobId) {
+      appendUniqueProviderIdentity(identities, "greenhouse", greenhouseLookup.jobId, {
+        board: greenhouseLookup.boardToken
+      });
+    }
+    if (parsed.protocol === "https:" && parsed.searchParams.has("gh_jid")) {
+      appendUniqueProviderIdentity(
+        identities,
+        "greenhouse",
+        normalizeGreenhouseJobId(parsed.searchParams.get("gh_jid"))
+      );
+    }
+
+    ycJobId = getWorkAtStartupJobIdFromUrl(parsed.href);
+    appendUniqueProviderIdentity(identities, "yc", ycJobId);
+
+    leverIdentity = getLeverRouteIdentity(parsed.href);
+    if (leverIdentity) {
+      appendUniqueProviderIdentity(
+        identities,
+        leverIdentity.provider,
+        leverIdentity.jobId,
+        { board: leverIdentity.board }
+      );
+    }
+
+    return identities;
+  }
+
+  function getBrowserRouteProviderIdentities(doc, pageUrl) {
+    var identities = getProviderRouteIdentitiesFromUrl(pageUrl);
+    var parsed;
+    var greenhouseRouteJobId;
+    var greenhouseRequest;
+
+    try {
+      parsed = new URL(String(pageUrl || ""));
+    } catch (error) {
+      return identities;
+    }
+
+    greenhouseRouteJobId = getGreenhouseJobIdFromUrl(parsed);
+    greenhouseRequest = greenhouseRouteJobId
+      ? getGreenhouseLookupRequest(doc, pageUrl)
+      : null;
+    if (
+      greenhouseRequest &&
+      String(greenhouseRequest.jobId) === String(greenhouseRouteJobId)
+    ) {
+      appendUniqueProviderIdentity(
+        identities,
+        "greenhouse",
+        greenhouseRouteJobId,
+        { board: greenhouseRequest.boardToken }
+      );
+    }
+
+    return identities;
+  }
+
+  function collectSchemaRouteValues(value, results) {
+    var values = results || [];
+
+    if (Array.isArray(value)) {
+      value.forEach(function (item) {
+        collectSchemaRouteValues(item, values);
+      });
+      return values;
+    }
+
+    if (typeof value === "string") {
+      if (value.trim()) {
+        values.push(value.trim());
+      }
+      return values;
+    }
+
+    if (value && typeof value === "object" && typeof value["@id"] === "string") {
+      collectSchemaRouteValues(value["@id"], values);
+    }
+
+    return values;
+  }
+
+  function isUrlLikeSchemaId(value) {
+    var normalized = String(value || "").trim();
+
+    if (!normalized || normalized.charAt(0) === "#") {
+      return false;
+    }
+
+    return (
+      /^[a-z][a-z0-9+.-]*:/i.test(normalized) ||
+      normalized.indexOf("/") !== -1 ||
+      normalized.indexOf("?") === 0 ||
+      normalized.indexOf(".") === 0
+    );
+  }
+
+  function collectSchemaIdentifierValues(value, results) {
+    var values = results || [];
+    var directValue;
+
+    if (Array.isArray(value)) {
+      value.forEach(function (item) {
+        collectSchemaIdentifierValues(item, values);
+      });
+      return values;
+    }
+
+    if (typeof value === "string" || typeof value === "number") {
+      directValue = String(value).trim();
+      if (directValue) {
+        values.push(directValue);
+      }
+      return values;
+    }
+
+    if (value && typeof value === "object") {
+      collectSchemaIdentifierValues(
+        value.value != null
+          ? value.value
+          : value["@value"] != null
+            ? value["@value"]
+            : null,
+        values
+      );
+    }
+
+    return values;
+  }
+
+  function providerIdentityMatches(left, right) {
+    return Boolean(
+      left &&
+        right &&
+        left.provider === right.provider &&
+        left.jobId === right.jobId &&
+        (!left.board || !right.board || left.board === right.board)
+    );
+  }
+
+  function getJobPostingRouteAttestation(candidate, pageUrl, doc) {
+    var node = candidate && candidate.node ? candidate.node : candidate || {};
+    var normalizedPageUrl = normalizeJobRouteUrl(pageUrl);
+    var schemaUrlValues = collectSchemaRouteValues(node.url, []).filter(function (value) {
+      return String(value || "").trim().charAt(0) !== "#";
+    });
+    var schemaIdValues = collectSchemaRouteValues(node["@id"], []).filter(
+      isUrlLikeSchemaId
+    );
+    var routeValues = schemaUrlValues.concat(schemaIdValues);
+    var normalizedCandidateUrls = [];
+    var pageProviderIdentities = getBrowserRouteProviderIdentities(doc, pageUrl);
+    var candidateProviderIdentities = [];
+    var identifierValues = collectSchemaIdentifierValues(node.identifier, []);
+    var matchedUrl = null;
+    var matchedProviderIdentity = null;
+    var comparableEvidence = false;
+
+    routeValues.forEach(function (value) {
+      var normalized = normalizeJobRouteUrl(value, pageUrl);
+
+      if (!normalized) {
+        return;
+      }
+      comparableEvidence = true;
+      if (normalizedCandidateUrls.indexOf(normalized) === -1) {
+        normalizedCandidateUrls.push(normalized);
+      }
+      if (normalized === normalizedPageUrl) {
+        matchedUrl = normalized;
+      }
+      getProviderRouteIdentitiesFromUrl(normalized).forEach(function (identity) {
+        appendUniqueProviderIdentity(
+          candidateProviderIdentities,
+          identity.provider,
+          identity.jobId,
+          { board: identity.board }
+        );
+      });
+    });
+
+    if (matchedUrl) {
+      return {
+        trusted: true,
+        reason: "route-identity-matched",
+        proof: "schema-url",
+        normalizedPageUrl: normalizedPageUrl,
+        matchedUrl: matchedUrl
+      };
+    }
+
+    pageProviderIdentities.some(function (pageIdentity) {
+      return candidateProviderIdentities.some(function (candidateIdentity) {
+        if (providerIdentityMatches(pageIdentity, candidateIdentity)) {
+          matchedProviderIdentity = pageIdentity;
+          return true;
+        }
+        return false;
+      });
+    });
+
+    if (!matchedProviderIdentity && pageProviderIdentities.length && identifierValues.length) {
+      comparableEvidence = true;
+      pageProviderIdentities.some(function (pageIdentity) {
+        return identifierValues.some(function (identifier) {
+          var normalizedIdentifier = String(identifier || "").trim().toLowerCase();
+
+          if (normalizedIdentifier === pageIdentity.jobId) {
+            matchedProviderIdentity = pageIdentity;
+            return true;
+          }
+          return false;
+        });
+      });
+    }
+
+    if (matchedProviderIdentity) {
+      return {
+        trusted: true,
+        reason: "route-identity-matched",
+        proof: "provider-job-id",
+        normalizedPageUrl: normalizedPageUrl,
+        provider: matchedProviderIdentity.provider,
+        jobId: matchedProviderIdentity.jobId
+      };
+    }
+
+    return {
+      trusted: false,
+      reason: comparableEvidence
+        ? "route-identity-mismatch"
+        : "route-identity-missing",
+      proof: "",
+      normalizedPageUrl: normalizedPageUrl,
+      candidateUrls: normalizedCandidateUrls
+    };
+  }
+
   function collectGreenhouseDateSources(job) {
     return [
       createDateSource({
@@ -1913,6 +2368,203 @@
     return target.origin !== page.origin;
   }
 
+  function getGreenhouseApiRouteIdentity(value) {
+    var parsed;
+    var match;
+
+    try {
+      parsed = new URL(String(value || ""));
+    } catch (error) {
+      return null;
+    }
+
+    if (parsed.origin !== GREENHOUSE_API_ORIGIN) {
+      return null;
+    }
+
+    match = parsed.pathname.match(/^\/v1\/boards\/([^/]+)\/jobs\/(\d+)\/?$/);
+    if (!match) {
+      return null;
+    }
+
+    return {
+      board: match[1].toLowerCase(),
+      jobId: match[2]
+    };
+  }
+
+  function getFetchResponseRouteValidation(requestedUrl, finalUrl, provider) {
+    var normalizedRequested = normalizeJobRouteUrl(requestedUrl);
+    var normalizedFinal = normalizeJobRouteUrl(finalUrl);
+    var requestedAshby;
+    var finalAshby;
+    var requestedGreenhouse;
+    var finalGreenhouse;
+    var requestedLever;
+    var finalLever;
+    var requestedOrigin;
+    var finalOrigin;
+
+    if (!normalizedRequested || !normalizedFinal) {
+      return {
+        trusted: false,
+        reason: "response-route-mismatch",
+        requestedUrl: normalizedRequested,
+        finalUrl: normalizedFinal
+      };
+    }
+
+    if (normalizedRequested === normalizedFinal) {
+      return {
+        trusted: true,
+        reason: "response-route-matched",
+        requestedUrl: normalizedRequested,
+        finalUrl: normalizedFinal
+      };
+    }
+
+    requestedOrigin = new URL(normalizedRequested).origin;
+    finalOrigin = new URL(normalizedFinal).origin;
+
+    if (provider === "ashby" && requestedOrigin === finalOrigin) {
+      requestedAshby = getAshbyUrlInfo(normalizedRequested);
+      finalAshby = getAshbyUrlInfo(normalizedFinal);
+      if (
+        requestedAshby &&
+        finalAshby &&
+        requestedAshby.jobId &&
+        requestedAshby.jobId === finalAshby.jobId &&
+        requestedAshby.boardPathSegment.toLowerCase() ===
+          finalAshby.boardPathSegment.toLowerCase()
+      ) {
+        return {
+          trusted: true,
+          reason: "response-route-matched",
+          requestedUrl: normalizedRequested,
+          finalUrl: normalizedFinal,
+          proof: "provider-job-id"
+        };
+      }
+    }
+
+    if (provider === "greenhouse") {
+      requestedGreenhouse = getGreenhouseApiRouteIdentity(normalizedRequested);
+      finalGreenhouse = getGreenhouseApiRouteIdentity(normalizedFinal);
+      if (
+        requestedGreenhouse &&
+        finalGreenhouse &&
+        requestedGreenhouse.board === finalGreenhouse.board &&
+        requestedGreenhouse.jobId === finalGreenhouse.jobId
+      ) {
+        return {
+          trusted: true,
+          reason: "response-route-matched",
+          requestedUrl: normalizedRequested,
+          finalUrl: normalizedFinal,
+          proof: "provider-job-id"
+        };
+      }
+    }
+
+    requestedLever = getCanonicalLeverPostingUrl(normalizedRequested);
+    finalLever = getCanonicalLeverPostingUrl(normalizedFinal);
+    if (requestedLever && finalLever && requestedLever === finalLever) {
+      return {
+        trusted: true,
+        reason: "response-route-matched",
+        requestedUrl: normalizedRequested,
+        finalUrl: normalizedFinal,
+        proof: "provider-job-id"
+      };
+    }
+
+    return {
+      trusted: false,
+      reason: "response-route-mismatch",
+      requestedUrl: normalizedRequested,
+      finalUrl: normalizedFinal
+    };
+  }
+
+  function createResponseRouteMismatchError(validation) {
+    var error = new Error("Fetched response did not match the requested job route.");
+
+    error.code = "response-route-mismatch";
+    error.requestedUrl = validation && validation.requestedUrl;
+    error.finalUrl = validation && validation.finalUrl;
+    return error;
+  }
+
+  function createBackgroundFetchError(response, fallbackMessage) {
+    var error = new Error(
+      response && response.message ? response.message : fallbackMessage
+    );
+
+    if (response && response.url) {
+      error.requestedUrl = normalizeJobRouteUrl(response.url);
+      error.finalUrl = normalizeJobRouteUrl(response.finalUrl);
+    }
+    if (response && response.code === "response-route-mismatch") {
+      error.code = response.code;
+    }
+
+    return error;
+  }
+
+  function createHttpFetchError(response, requestedUrl, finalUrl) {
+    var error = new Error("HTTP " + response.status);
+
+    error.requestedUrl = normalizeJobRouteUrl(requestedUrl);
+    error.finalUrl = normalizeJobRouteUrl(finalUrl);
+    return error;
+  }
+
+  function assertFetchResponseRoute(requestedUrl, finalUrl, provider) {
+    var validation = getFetchResponseRouteValidation(
+      requestedUrl,
+      finalUrl,
+      provider
+    );
+
+    if (!validation.trusted) {
+      throw createResponseRouteMismatchError(validation);
+    }
+
+    return validation;
+  }
+
+  function getFetchFailureReason(error) {
+    return error && error.code === "response-route-mismatch"
+      ? "response-route-mismatch"
+      : "fetch-failed";
+  }
+
+  function getFetchDebug(value) {
+    if (!value) {
+      return null;
+    }
+
+    return {
+      requestedUrl: value.requestedUrl || "",
+      finalUrl: value.finalUrl || "",
+      route: value.routeValidation
+        ? value.routeValidation.reason
+        : "response-route-matched"
+    };
+  }
+
+  function getFetchErrorDebug(error) {
+    if (!error || !error.requestedUrl) {
+      return null;
+    }
+
+    return {
+      requestedUrl: error.requestedUrl,
+      finalUrl: error.finalUrl || "",
+      route: getFetchFailureReason(error)
+    };
+  }
+
   function installBrowserApi() {
     var currentUrl = window.location.href;
     var currentRouteKey = getRouteKey(currentUrl);
@@ -1931,15 +2583,10 @@
     var staleDomFingerprint = null;
 
     function getRouteKey(value) {
-      var parsed;
-
-      try {
-        parsed = new URL(String(value || ""), window.location.href);
-      } catch (error) {
-        return String(value || "").split("#")[0];
-      }
-
-      return parsed.origin + parsed.pathname + parsed.search;
+      return (
+        normalizeJobRouteUrl(value, window.location.href) ||
+        String(value || "").split("#")[0]
+      );
     }
 
     function jsonLdTextsEqual(left, right) {
@@ -1996,7 +2643,7 @@
     }
 
     function rememberStaleDomFingerprint(routeKey, jsonLdTexts) {
-      if (!routeKey || !Array.isArray(jsonLdTexts)) {
+      if (!routeKey || !Array.isArray(jsonLdTexts) || !jsonLdTexts.length) {
         return;
       }
 
@@ -2495,7 +3142,7 @@
           generation: request.generation,
           expectedRouteKey: request.routeKey,
           previousJsonLdTexts: request.previousJsonLdTexts,
-          freshFirst: Boolean(request.freshFirst)
+          forceFresh: Boolean(request.forceFresh)
         },
         request.completion
       );
@@ -2511,6 +3158,7 @@
       }
 
       if (pendingNavigation && !pendingNavigation.completion.settled) {
+        pendingNavigation.forceFresh = true;
         return pendingNavigation.completion.promise;
       }
 
@@ -2535,7 +3183,7 @@
         targetUrl: window.location.href,
         routeKey: routeKey,
         previousJsonLdTexts: jsonLdGuard,
-        freshFirst: true,
+        forceFresh: true,
         completion: createScanCompletion()
       };
       renderLoadingBadge();
@@ -2605,39 +3253,94 @@
             result.selectionReason === "title-mismatch" ||
             result.selectionReason === "missing-heading" ||
             result.selectionReason === "generic-heading" ||
-            result.selectionReason === "missing-job-title")
+            result.selectionReason === "missing-job-title" ||
+            result.selectionReason === "route-identity-missing" ||
+            result.selectionReason === "route-identity-mismatch")
       );
     }
 
-    function reconcileLiveDomAfterFreshSelection(pageUrl, domSnapshot, freshSnapshot) {
-      var routeKey = getRouteKey(pageUrl);
+    function scanLiveDomFallback(scanOptions, pageRouteKey, debug, pageUrl, phase) {
+      var options = scanOptions || {};
+      var jsonLdGuard =
+        Array.isArray(options.previousJsonLdTexts) &&
+        options.previousJsonLdTexts.length
+        ? options.previousJsonLdTexts
+        : getManualJsonLdGuard(pageRouteKey);
+      var pageContext = getPageContext(document);
+      var snapshot = scanDocument(document, pageContext);
+      var jsonLdUnchanged =
+        Array.isArray(jsonLdGuard) &&
+        jsonLdGuard.length > 0 &&
+        jsonLdTextsEqual(snapshot.jsonLdTexts, jsonLdGuard);
+      var routeAttestation = null;
+      var notice;
 
-      if (
-        !domSnapshot ||
-        !domSnapshot.result ||
-        !domSnapshot.result.candidates.length
-      ) {
-        return;
+      if (jsonLdUnchanged) {
+        rememberStaleDomFingerprint(pageRouteKey, snapshot.jsonLdTexts);
+        snapshot = snapshotWithoutSelected(snapshot);
+        notice = {
+          message: "Structured job data looks stale",
+          helper:
+            "The current DOM's JobPosting JSON-LD is unchanged from the previous route."
+        };
+      } else if (snapshot.result.selected) {
+        routeAttestation = getJobPostingRouteAttestation(
+          snapshot.result.selected,
+          pageUrl,
+          document
+        );
+        if (!routeAttestation.trusted) {
+          snapshot = snapshotWithoutSelected(snapshot, routeAttestation.reason);
+        }
+        notice = getNoResultNotice(
+          snapshot.result,
+          snapshot.jsonLdTexts,
+          snapshot.readyState
+        );
+      } else {
+        notice = getNoResultNotice(
+          snapshot.result,
+          snapshot.jsonLdTexts,
+          snapshot.readyState
+        );
       }
 
-      if (
-        freshSnapshot &&
-        Array.isArray(freshSnapshot.jsonLdTexts) &&
-        freshSnapshot.jsonLdTexts.length &&
-        jsonLdTextsEqual(domSnapshot.jsonLdTexts, freshSnapshot.jsonLdTexts)
-      ) {
-        clearStaleDomFingerprint(routeKey);
-        return;
-      }
+      addDebugAttempt(debug, {
+        source: "dom-jsonld",
+        status: snapshot.result.selected ? "selected" : "no-match",
+        snapshot: snapshot,
+        phase: phase || "post-fetch",
+        routeAttestation: routeAttestation,
+        reason: snapshot.result.selected
+          ? routeAttestation.reason
+          : jsonLdUnchanged
+            ? "unchanged-after-navigation"
+            : snapshot.result.selectionReason || "no-selected-jobposting"
+      });
 
-      rememberStaleDomFingerprint(routeKey, domSnapshot.jsonLdTexts);
+      return {
+        notice: notice,
+        snapshot: snapshot,
+        stale: jsonLdUnchanged,
+        routeAttestation: routeAttestation
+      };
     }
 
-    function finishSelectedScan(snapshot, source, debug, pageUrl, domSnapshot) {
+    function getLiveDomFailureNotice(liveFallback) {
+      if (
+        !liveFallback ||
+        (!liveFallback.stale &&
+          !hasUntrustedScanResult(liveFallback.snapshot.result))
+      ) {
+        return null;
+      }
+
+      return liveFallback.notice;
+    }
+
+    function finishSelectedScan(snapshot, source, debug, pageUrl) {
       if (source === "dom") {
         clearStaleDomFingerprint(getRouteKey(pageUrl));
-      } else {
-        reconcileLiveDomAfterFreshSelection(pageUrl, domSnapshot, snapshot);
       }
       renderBadge(snapshot.result);
       recordSuccessfulScan(pageUrl);
@@ -2645,12 +3348,6 @@
     }
 
     function finishDeferredLiveScan(domSnapshot, debug, pageUrl) {
-      addDebugAttempt(debug, {
-        source: "dom-jsonld",
-        status: "selected",
-        snapshot: domSnapshot,
-        reason: "verified-live-fallback"
-      });
       return finishSelectedScan(domSnapshot, "dom", debug, pageUrl);
     }
 
@@ -2680,15 +3377,27 @@
         window
           .fetch(url, options)
           .then(function (response) {
+            var finalUrl;
+            var routeValidation;
+
+            finalUrl = response.url || url;
+            routeValidation = assertFetchResponseRoute(url, finalUrl, "html");
             if (!response.ok) {
-              throw new Error("HTTP " + response.status);
+              throw createHttpFetchError(response, url, finalUrl);
             }
-            return response.text();
+            return response.text().then(function (htmlText) {
+              return {
+                htmlText: htmlText,
+                requestedUrl: url,
+                finalUrl: finalUrl,
+                routeValidation: routeValidation
+              };
+            });
           })
           .then(
-            function (htmlText) {
+            function (fetchResult) {
               window.clearTimeout(timeoutId);
-              resolve(htmlText);
+              resolve(fetchResult);
             },
             function (error) {
               window.clearTimeout(timeoutId);
@@ -2739,6 +3448,8 @@
             },
             function (response) {
               var lastError = chrome.runtime && chrome.runtime.lastError;
+              var finalUrl;
+              var routeValidation;
 
               if (lastError) {
                 rejectOnce(new Error(lastError.message || "Background HTML fetch failed."));
@@ -2747,16 +3458,27 @@
 
               if (!response || !response.ok) {
                 rejectOnce(
-                  new Error(
-                    response && response.message
-                      ? response.message
-                      : "Background HTML fetch failed."
+                  createBackgroundFetchError(
+                    response,
+                    "Background HTML fetch failed."
                   )
                 );
                 return;
               }
 
-              resolveOnce(response.htmlText || "");
+              finalUrl = response.finalUrl || response.url || url;
+              try {
+                routeValidation = assertFetchResponseRoute(url, finalUrl, "lever");
+              } catch (error) {
+                rejectOnce(error);
+                return;
+              }
+              resolveOnce({
+                htmlText: response.htmlText || "",
+                requestedUrl: url,
+                finalUrl: finalUrl,
+                routeValidation: routeValidation
+              });
             }
           );
         } catch (error) {
@@ -2807,6 +3529,9 @@
             },
             function (response) {
               var lastError = chrome.runtime && chrome.runtime.lastError;
+              var requestedUrl;
+              var finalUrl;
+              var routeValidation;
 
               if (lastError) {
                 rejectOnce(new Error(lastError.message || "Background YC job fetch failed."));
@@ -2815,16 +3540,32 @@
 
               if (!response || !response.ok) {
                 rejectOnce(
-                  new Error(
-                    response && response.message
-                      ? response.message
-                      : "Background YC job fetch failed."
+                  createBackgroundFetchError(
+                    response,
+                    "Background YC job fetch failed."
                   )
                 );
                 return;
               }
 
-              resolveOnce(response.htmlText || "");
+              requestedUrl = response.url || "";
+              finalUrl = response.finalUrl || requestedUrl;
+              try {
+                routeValidation = assertFetchResponseRoute(
+                  requestedUrl,
+                  finalUrl,
+                  "yc"
+                );
+              } catch (error) {
+                rejectOnce(error);
+                return;
+              }
+              resolveOnce({
+                htmlText: response.htmlText || "",
+                requestedUrl: requestedUrl,
+                finalUrl: finalUrl,
+                routeValidation: routeValidation
+              });
             }
           );
         } catch (error) {
@@ -2874,6 +3615,8 @@
             },
             function (response) {
               var lastError = chrome.runtime && chrome.runtime.lastError;
+              var finalUrl;
+              var routeValidation;
 
               if (lastError) {
                 rejectOnce(new Error(lastError.message || "Background Ashby job fetch failed."));
@@ -2882,16 +3625,31 @@
 
               if (!response || !response.ok) {
                 rejectOnce(
-                  new Error(
-                    response && response.message
-                      ? response.message
-                      : "Background Ashby job fetch failed."
+                  createBackgroundFetchError(
+                    response,
+                    "Background Ashby job fetch failed."
                   )
                 );
                 return;
               }
 
-              resolveOnce(response.htmlText || "");
+              finalUrl = response.finalUrl || response.url || lookupRequest.jobUrl;
+              try {
+                routeValidation = assertFetchResponseRoute(
+                  lookupRequest.jobUrl,
+                  finalUrl,
+                  "ashby"
+                );
+              } catch (error) {
+                rejectOnce(error);
+                return;
+              }
+              resolveOnce({
+                htmlText: response.htmlText || "",
+                requestedUrl: lookupRequest.jobUrl,
+                finalUrl: finalUrl,
+                routeValidation: routeValidation
+              });
             }
           );
         } catch (error) {
@@ -2926,15 +3684,35 @@
         window
           .fetch(lookupRequest.apiUrl, options)
           .then(function (response) {
+            var finalUrl;
+            var routeValidation;
+
+            finalUrl = response.url || lookupRequest.apiUrl;
+            routeValidation = assertFetchResponseRoute(
+              lookupRequest.apiUrl,
+              finalUrl,
+              "greenhouse"
+            );
             if (!response.ok) {
-              throw new Error("HTTP " + response.status);
+              throw createHttpFetchError(
+                response,
+                lookupRequest.apiUrl,
+                finalUrl
+              );
             }
-            return response.json();
+            return response.json().then(function (json) {
+              return {
+                json: json || {},
+                requestedUrl: lookupRequest.apiUrl,
+                finalUrl: finalUrl,
+                routeValidation: routeValidation
+              };
+            });
           })
           .then(
-            function (json) {
+            function (fetchResult) {
               window.clearTimeout(timeoutId);
-              resolve(json || {});
+              resolve(fetchResult);
             },
             function (error) {
               window.clearTimeout(timeoutId);
@@ -2957,12 +3735,10 @@
       var scanId = Number.isInteger(scanOptions.generation)
         ? scanOptions.generation
         : activeScanId + 1;
-      var pageContext;
       var domSnapshot;
-      var domJsonLdUnchanged = false;
-      var freshFirst = Boolean(scanOptions.freshFirst);
       var freshAmbiguityFound = false;
       var htmlSnapshot;
+      var liveFallback;
       var notice;
       var pageUrl = window.location.href;
       var pageRouteKey = getRouteKey(pageUrl);
@@ -3014,68 +3790,35 @@
       resetInteractionForNewUrl();
       renderLoadingBadge();
 
-      pageContext = getPageContext(document);
-      domSnapshot = scanDocument(document, pageContext);
-      domJsonLdUnchanged =
+      if (
         Array.isArray(scanOptions.previousJsonLdTexts) &&
-        jsonLdTextsEqual(domSnapshot.jsonLdTexts, scanOptions.previousJsonLdTexts);
-      if (domJsonLdUnchanged) {
-        rememberStaleDomFingerprint(pageRouteKey, domSnapshot.jsonLdTexts);
-      }
-      if (domJsonLdUnchanged && domSnapshot.result.selected) {
-        domSnapshot = snapshotWithoutSelected(domSnapshot);
-      }
-      if (domJsonLdUnchanged) {
-        technicalNotice = {
-          message: "Structured job data looks stale",
-          helper:
-            "The current DOM's JobPosting JSON-LD is unchanged from the previous route."
-        };
-      } else if (hasUntrustedScanResult(domSnapshot.result)) {
-        technicalNotice = getNoResultNotice(
-          domSnapshot.result,
-          domSnapshot.jsonLdTexts,
-          domSnapshot.readyState
+        scanOptions.previousJsonLdTexts.length
+      ) {
+        rememberStaleDomFingerprint(
+          pageRouteKey,
+          scanOptions.previousJsonLdTexts
         );
-      }
-      addDebugAttempt(debug, {
-        source: "dom-jsonld",
-        status: domSnapshot.result.selected
-          ? freshFirst
-            ? "deferred"
-            : "selected"
-          : "no-match",
-        snapshot: domSnapshot,
-        reason: domSnapshot.result.selected
-          ? freshFirst
-            ? "fresh-verification-required"
-            : ""
-          : domJsonLdUnchanged
-            ? "unchanged-after-navigation"
-            : domSnapshot.result.selectionReason || "no-selected-jobposting"
-      });
-
-      if (domSnapshot.result.selected && !freshFirst) {
-        return finishSelectedScan(domSnapshot, "dom", debug, pageUrl);
-      }
-
-      if (domSnapshot.readyState && domSnapshot.readyState !== "complete") {
-        addDebugAttempt(debug, {
-          source: "html-fallback",
-          status: "skipped",
-          reason: "document-not-ready"
-        });
-        notice = getNoResultNotice(
-          domSnapshot.result,
-          domSnapshot.jsonLdTexts,
-          domSnapshot.readyState
-        );
-        showScanFailure(notice, scanOptions);
-        return summarizeScan(domSnapshot, "dom", "", debug);
       }
 
       greenhouseLookupDebug = getGreenhouseLookupDebugInfo(document, pageUrl);
       greenhouseLookupRequest = greenhouseLookupDebug.request;
+      if (
+        scanOptions.trigger === "navigation" &&
+        !scanOptions.forceFresh &&
+        !greenhouseLookupRequest
+      ) {
+        liveFallback = scanLiveDomFallback(
+          scanOptions,
+          pageRouteKey,
+          debug,
+          pageUrl,
+          "navigation-fast-path"
+        );
+        domSnapshot = liveFallback.snapshot;
+        if (domSnapshot.result.selected) {
+          return finishSelectedScan(domSnapshot, "dom", debug, pageUrl);
+        }
+      }
       if (greenhouseLookupRequest) {
         try {
           greenhouseJson = await fetchGreenhouseJobPosting(greenhouseLookupRequest);
@@ -3100,7 +3843,7 @@
           }
 
           htmlSnapshot = createSnapshot(
-            scanGreenhouseJobPosting(greenhouseJson, greenhouseLookupRequest)
+            scanGreenhouseJobPosting(greenhouseJson.json, greenhouseLookupRequest)
           );
           freshAmbiguityFound =
             freshAmbiguityFound || isAmbiguousScanResult(htmlSnapshot.result);
@@ -3109,14 +3852,14 @@
               source: "greenhouse-api",
               status: "selected",
               snapshot: htmlSnapshot,
-              lookup: greenhouseLookupDebug.lookup
+              lookup: greenhouseLookupDebug.lookup,
+              response: getFetchDebug(greenhouseJson)
             });
             return finishSelectedScan(
               htmlSnapshot,
               "greenhouse-api",
               debug,
-              pageUrl,
-              domSnapshot
+              pageUrl
             );
           }
 
@@ -3125,10 +3868,21 @@
             status: "no-match",
             reason: "greenhouse-no-match",
             snapshot: htmlSnapshot,
-            lookup: greenhouseLookupDebug.lookup
+            lookup: greenhouseLookupDebug.lookup,
+            response: getFetchDebug(greenhouseJson)
           });
-          if (freshFirst && domSnapshot.result.selected && !freshAmbiguityFound) {
-            return finishDeferredLiveScan(domSnapshot, debug, pageUrl);
+          if (!freshAmbiguityFound) {
+            liveFallback = scanLiveDomFallback(
+              scanOptions,
+              pageRouteKey,
+              debug,
+              pageUrl,
+              "post-fetch"
+            );
+            domSnapshot = liveFallback.snapshot;
+            if (domSnapshot.result.selected) {
+              return finishDeferredLiveScan(domSnapshot, debug, pageUrl);
+            }
           }
           notice = isAmbiguousScanResult(htmlSnapshot.result)
             ? getNoResultNotice(
@@ -3136,7 +3890,8 @@
                 htmlSnapshot.jsonLdTexts,
                 htmlSnapshot.readyState
               )
-            : getGreenhouseNoResultNotice();
+            : getLiveDomFailureNotice(liveFallback) ||
+              getGreenhouseNoResultNotice();
           showScanFailure(notice, scanOptions);
           return summarizeScan(htmlSnapshot, "greenhouse-api", "greenhouse-no-match", debug);
         } catch (error) {
@@ -3163,8 +3918,9 @@
           addDebugAttempt(debug, {
             source: "greenhouse-api",
             status: "failed",
-            reason: "fetch-failed",
+            reason: getFetchFailureReason(error),
             lookup: greenhouseLookupDebug.lookup,
+            response: getFetchErrorDebug(error),
             error: error
           });
           technicalNotice = getProviderFetchFailureNotice("Greenhouse", error);
@@ -3203,7 +3959,7 @@
             return summarizeScan(null, "ashby-jsonld", "scan-superseded", debug);
           }
 
-          htmlSnapshot = scanHtmlText(htmlText, null, null, "trusted");
+          htmlSnapshot = scanHtmlText(htmlText.htmlText, null, null, "trusted");
           freshAmbiguityFound =
             freshAmbiguityFound || isAmbiguousScanResult(htmlSnapshot.result);
           if (htmlSnapshot.result.selected) {
@@ -3211,14 +3967,14 @@
               source: "ashby-jsonld",
               status: "selected",
               snapshot: htmlSnapshot,
-              lookup: ashbyLookupDebug.lookup
+              lookup: ashbyLookupDebug.lookup,
+              response: getFetchDebug(htmlText)
             });
             return finishSelectedScan(
               htmlSnapshot,
               "ashby-jsonld",
               debug,
-              pageUrl,
-              domSnapshot
+              pageUrl
             );
           }
 
@@ -3227,15 +3983,24 @@
             status: "no-match",
             reason: "ashby-jsonld-no-match",
             snapshot: htmlSnapshot,
-            lookup: ashbyLookupDebug.lookup
+            lookup: ashbyLookupDebug.lookup,
+            response: getFetchDebug(htmlText)
           });
-          technicalNotice = isAmbiguousScanResult(htmlSnapshot.result)
-            ? getNoResultNotice(
-                htmlSnapshot.result,
-                htmlSnapshot.jsonLdTexts,
-                htmlSnapshot.readyState
-              )
-            : getHtmlFallbackNoResultNotice();
+          if (isAmbiguousScanResult(htmlSnapshot.result)) {
+            notice = getNoResultNotice(
+              htmlSnapshot.result,
+              htmlSnapshot.jsonLdTexts,
+              htmlSnapshot.readyState
+            );
+            showScanFailure(notice, scanOptions);
+            return summarizeScan(
+              htmlSnapshot,
+              "ashby-jsonld",
+              "ashby-jsonld-no-match",
+              debug
+            );
+          }
+          technicalNotice = getHtmlFallbackNoResultNotice();
         } catch (error) {
           if (scanId !== activeScanId) {
             addDebugAttempt(debug, {
@@ -3260,8 +4025,9 @@
           addDebugAttempt(debug, {
             source: "ashby-jsonld",
             status: "failed",
-            reason: "fetch-failed",
+            reason: getFetchFailureReason(error),
             lookup: ashbyLookupDebug.lookup,
+            response: getFetchErrorDebug(error),
             error: error
           });
           technicalNotice = getProviderFetchFailureNotice("Ashby", error);
@@ -3305,7 +4071,7 @@
             return summarizeScan(null, "yc-jsonld", "scan-superseded", debug);
           }
 
-          htmlSnapshot = scanHtmlText(htmlText, null, null, "trusted");
+          htmlSnapshot = scanHtmlText(htmlText.htmlText, null, null, "trusted");
           freshAmbiguityFound =
             freshAmbiguityFound || isAmbiguousScanResult(htmlSnapshot.result);
           if (htmlSnapshot.result.selected && htmlSnapshot.result.selected.datePostedRaw) {
@@ -3313,14 +4079,14 @@
               source: "yc-jsonld",
               status: "selected",
               snapshot: htmlSnapshot,
-              lookup: ycLookupDebug
+              lookup: ycLookupDebug,
+              response: getFetchDebug(htmlText)
             });
             return finishSelectedScan(
               htmlSnapshot,
               "yc-jsonld",
               debug,
-              pageUrl,
-              domSnapshot
+              pageUrl
             );
           }
 
@@ -3330,10 +4096,21 @@
             status: "no-match",
             reason: "yc-jsonld-no-match",
             snapshot: htmlSnapshot,
-            lookup: ycLookupDebug
+            lookup: ycLookupDebug,
+            response: getFetchDebug(htmlText)
           });
-          if (freshFirst && domSnapshot.result.selected && !freshAmbiguityFound) {
-            return finishDeferredLiveScan(domSnapshot, debug, pageUrl);
+          if (!freshAmbiguityFound) {
+            liveFallback = scanLiveDomFallback(
+              scanOptions,
+              pageRouteKey,
+              debug,
+              pageUrl,
+              "post-fetch"
+            );
+            domSnapshot = liveFallback.snapshot;
+            if (domSnapshot.result.selected) {
+              return finishDeferredLiveScan(domSnapshot, debug, pageUrl);
+            }
           }
           notice = isAmbiguousScanResult(htmlSnapshot.result)
             ? getNoResultNotice(
@@ -3341,7 +4118,8 @@
                 htmlSnapshot.jsonLdTexts,
                 htmlSnapshot.readyState
               )
-            : getHtmlFallbackNoResultNotice();
+            : getLiveDomFailureNotice(liveFallback) ||
+              getHtmlFallbackNoResultNotice();
           showScanFailure(notice, scanOptions);
           return summarizeScan(htmlSnapshot, "yc-jsonld", "yc-jsonld-no-match", debug);
         } catch (error) {
@@ -3368,14 +4146,27 @@
           addDebugAttempt(debug, {
             source: "yc-jsonld",
             status: "failed",
-            reason: "fetch-failed",
+            reason: getFetchFailureReason(error),
             lookup: ycLookupDebug,
+            response: getFetchErrorDebug(error),
             error: error
           });
-          if (freshFirst && domSnapshot.result.selected && !freshAmbiguityFound) {
-            return finishDeferredLiveScan(domSnapshot, debug, pageUrl);
+          if (!freshAmbiguityFound) {
+            liveFallback = scanLiveDomFallback(
+              scanOptions,
+              pageRouteKey,
+              debug,
+              pageUrl,
+              "post-fetch"
+            );
+            domSnapshot = liveFallback.snapshot;
+            if (domSnapshot.result.selected) {
+              return finishDeferredLiveScan(domSnapshot, debug, pageUrl);
+            }
           }
-          notice = getProviderFetchFailureNotice("YC", error);
+          notice =
+            getLiveDomFailureNotice(liveFallback) ||
+            getProviderFetchFailureNotice("YC", error);
           showScanFailure(notice, scanOptions);
           return summarizeScan(domSnapshot, "yc-jsonld", "yc-jsonld-no-match", debug);
         }
@@ -3414,7 +4205,7 @@
           return summarizeScan(null, "html", "scan-superseded", debug);
         }
 
-        htmlSnapshot = scanHtmlText(htmlText, null, null, "trusted");
+        htmlSnapshot = scanHtmlText(htmlText.htmlText, null, null, "trusted");
         freshAmbiguityFound =
           freshAmbiguityFound || isAmbiguousScanResult(htmlSnapshot.result);
         if (htmlSnapshot.result.selected) {
@@ -3422,14 +4213,14 @@
             source: "html-fallback",
             status: "selected",
             snapshot: htmlSnapshot,
-            lookup: { url: fallbackUrl }
+            lookup: { url: fallbackUrl },
+            response: getFetchDebug(htmlText)
           });
           return finishSelectedScan(
             htmlSnapshot,
             "html",
             debug,
-            pageUrl,
-            domSnapshot
+            pageUrl
           );
         }
 
@@ -3438,10 +4229,21 @@
           status: "no-match",
           reason: "html-no-match",
           snapshot: htmlSnapshot,
-          lookup: { url: fallbackUrl }
+          lookup: { url: fallbackUrl },
+          response: getFetchDebug(htmlText)
         });
-        if (freshFirst && domSnapshot.result.selected && !freshAmbiguityFound) {
-          return finishDeferredLiveScan(domSnapshot, debug, pageUrl);
+        if (!freshAmbiguityFound) {
+          liveFallback = scanLiveDomFallback(
+            scanOptions,
+            pageRouteKey,
+            debug,
+            pageUrl,
+            "post-fetch"
+          );
+          domSnapshot = liveFallback.snapshot;
+          if (domSnapshot.result.selected) {
+            return finishDeferredLiveScan(domSnapshot, debug, pageUrl);
+          }
         }
         if (isAmbiguousScanResult(htmlSnapshot.result)) {
           technicalNotice = getNoResultNotice(
@@ -3456,8 +4258,9 @@
             htmlSnapshot.readyState
           );
         }
-        if (technicalNotice) {
-          showScanFailure(technicalNotice, scanOptions);
+        notice = getLiveDomFailureNotice(liveFallback) || technicalNotice;
+        if (notice) {
+          showScanFailure(notice, scanOptions);
         } else {
           showNoData(scanOptions);
         }
@@ -3486,39 +4289,53 @@
         addDebugAttempt(debug, {
           source: "html-fallback",
           status: "failed",
-          reason: "fetch-failed",
+          reason: getFetchFailureReason(error),
           lookup: { url: fallbackUrl },
+          response: getFetchErrorDebug(error),
           error: error
         });
-        if (freshFirst && domSnapshot.result.selected && !freshAmbiguityFound) {
-          return finishDeferredLiveScan(domSnapshot, debug, pageUrl);
+        if (!freshAmbiguityFound) {
+          liveFallback = scanLiveDomFallback(
+            scanOptions,
+            pageRouteKey,
+            debug,
+            pageUrl,
+            "post-fetch"
+          );
+          domSnapshot = liveFallback.snapshot;
+          if (domSnapshot.result.selected) {
+            return finishDeferredLiveScan(domSnapshot, debug, pageUrl);
+          }
         }
         notice =
-          freshAmbiguityFound && technicalNotice
+          getLiveDomFailureNotice(liveFallback) ||
+          (freshAmbiguityFound && technicalNotice
             ? technicalNotice
-            : getHtmlFetchFailureNotice(error);
+            : getHtmlFetchFailureNotice(error));
         showScanFailure(notice, scanOptions);
-        return summarizeScan(domSnapshot, "dom", "html-fetch-failed", debug);
+        return summarizeScan(
+          domSnapshot,
+          "dom",
+          getFetchFailureReason(error) === "response-route-mismatch"
+            ? "response-route-mismatch"
+            : "html-fetch-failed",
+          debug
+        );
       }
     }
 
     function scanOnce() {
-      var freshFirst;
       var routeKey;
       var request;
 
-      freshFirst = !navigationSessionActive;
       startNavigationSession();
 
       if (pendingNavigation && !pendingNavigation.completion.settled) {
+        pendingNavigation.forceFresh = true;
         return pendingNavigation.completion.promise;
       }
 
       routeKey = getRouteKey(window.location.href);
-      freshFirst =
-        freshFirst ||
-        !lastSuccessfulRouteKey ||
-        routeKey !== lastSuccessfulRouteKey;
       if (
         activeRouteScan &&
         !activeRouteScan.completion.settled &&
@@ -3535,8 +4352,7 @@
         trigger: "manual",
         generation: activeScanId,
         expectedRouteKey: routeKey,
-        previousJsonLdTexts: getManualJsonLdGuard(routeKey),
-        freshFirst: freshFirst
+        previousJsonLdTexts: getManualJsonLdGuard(routeKey)
       };
 
       return startTrackedScan(request, createScanCompletion());
@@ -3591,7 +4407,10 @@
   };
 
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = api;
+    module.exports = Object.assign({}, api, {
+      normalizeJobRouteUrl: normalizeJobRouteUrl,
+      getJobPostingRouteAttestation: getJobPostingRouteAttestation
+    });
   }
 
   if (typeof document !== "undefined" && typeof window !== "undefined") {

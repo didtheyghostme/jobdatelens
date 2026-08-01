@@ -5,6 +5,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const { browserFixtures } = require("./provider-fixtures");
+const PRIMARY_HEADING_SELECTOR = 'h1, [role="heading"][aria-level="1"]';
 
 function createFakeElement(document, tagName) {
   const childNodes = [];
@@ -203,21 +204,60 @@ async function flushAsyncWork() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
-function createJobPostingJsonLd(title, datePosted, company = "Meticulous") {
-  return JSON.stringify({
-    "@context": "https://schema.org",
-    "@type": "JobPosting",
-    title,
-    datePosted,
-    hiringOrganization: {
-      "@type": "Organization",
-      name: company
+function createJobPostingJsonLd(
+  title,
+  datePosted,
+  company = "Meticulous",
+  overrides = {}
+) {
+  return JSON.stringify(
+    Object.assign(
+      {
+        "@context": "https://schema.org",
+        "@type": "JobPosting",
+        title,
+        datePosted,
+        hiringOrganization: {
+          "@type": "Organization",
+          name: company
+        }
+      },
+      overrides
+    )
+  );
+}
+
+function createFakePrimaryHeading(text, options = {}) {
+  const attributes = Object.assign({}, options.attributes);
+  const tagName = (options.tagName || "h1").toUpperCase();
+
+  if (tagName !== "H1") {
+    attributes.role = attributes.role || "heading";
+    attributes["aria-level"] = attributes["aria-level"] || "1";
+  }
+
+  return {
+    tagName,
+    textContent: text,
+    hidden: Boolean(options.hidden),
+    attributes,
+    computedStyle: Object.assign(
+      { display: "block", visibility: "visible" },
+      options.computedStyle
+    ),
+    parentElement: options.parentElement || null,
+    getAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(attributes, name)
+        ? attributes[name]
+        : null;
     }
-  });
+  };
 }
 
 function setFakeJobPage(document, title, options = {}) {
   document.currentHeading = title;
+  document.primaryHeadings =
+    options.primaryHeadings || [createFakePrimaryHeading(title)];
   document.title = `${title} | ${options.company || "Meticulous"}`;
   document.body.innerText = `${title} ${options.company || "Meticulous"}`;
   document.body.textContent = document.body.innerText;
@@ -233,9 +273,21 @@ function setFakeJobPage(document, title, options = {}) {
   }
   document.querySelector = (selector) => {
     if (selector === "h1") {
-      return { textContent: document.currentHeading };
+      return (
+        document.primaryHeadings.find((heading) => heading.tagName === "H1") ||
+        null
+      );
     }
     return null;
+  };
+  document.querySelectorAll = (selector) => {
+    if (selector === PRIMARY_HEADING_SELECTOR) {
+      return document.primaryHeadings;
+    }
+    if (selector === "a[href]") {
+      return document.links;
+    }
+    return [];
   };
 }
 
@@ -304,9 +356,15 @@ function createJsonLdDocument(jsonLdText, options = {}) {
   }));
   document.querySelector = (selector) => {
     if (selector === "h1" && options.heading) {
-      return { textContent: options.heading };
+      return createFakePrimaryHeading(options.heading);
     }
     return null;
+  };
+  document.querySelectorAll = (selector) => {
+    if (selector === PRIMARY_HEADING_SELECTOR && options.heading) {
+      return [createFakePrimaryHeading(options.heading)];
+    }
+    return [];
   };
 
   return document;
@@ -342,6 +400,9 @@ function createDocumentFromFixture(fixture) {
     return null;
   };
   document.querySelectorAll = (selector) => {
+    if (selector === PRIMARY_HEADING_SELECTOR && page.heading) {
+      return [createFakePrimaryHeading(page.heading)];
+    }
     if (selector === "a[href]") {
       return document.links;
     }
@@ -388,7 +449,14 @@ function createFixtureChrome(fixture, capture) {
         }
         callback({
           ok: true,
-          htmlText: fixture.background.htmlText
+          htmlText: fixture.background.htmlText,
+          url:
+            fixture.background.responseUrl ||
+            fixture.background.expectedJobUrl,
+          finalUrl:
+            fixture.background.finalUrl ||
+            fixture.background.responseUrl ||
+            fixture.background.expectedJobUrl
         });
       }
     }
@@ -674,7 +742,9 @@ test("a no-data listings page follows a later same-document job navigation", asy
   fakeWindow.location.href = jobUrl;
   navigation.currentEntry.url = jobUrl;
   setFakeJobPage(document, title, {
-    jsonLdText: createJobPostingJsonLd(title, "2026-07-20")
+    jsonLdText: createJobPostingJsonLd(title, "2026-07-20", "Meticulous", {
+      url: jobUrl
+    })
   });
   navigation.dispatch("navigatesuccess");
   assert.equal(frames.pendingCount(), 1);
@@ -682,8 +752,21 @@ test("a no-data listings page follows a later same-document job navigation", asy
   await flushAsyncWork();
 
   badge = document.getElementById("jobdatelens-badge");
+  const navigationDebug = fakeWindow.JobDateLens.getLastScanDebug();
+  const fastDomAttempt = navigationDebug.attempts.find(
+    (attempt) => attempt.source === "dom-jsonld"
+  );
+
   assert.match(getElementText(badge), new RegExp(title));
   assert.equal(fetchCalls, 1);
+  assert.equal(fastDomAttempt.status, "selected");
+  assert.equal(fastDomAttempt.phase, "navigation-fast-path");
+  assert.equal(fastDomAttempt.reason, "route-identity-matched");
+  assert.equal(fastDomAttempt.routeAttestation.proof, "schema-url");
+  assert.equal(
+    navigationDebug.attempts.find((attempt) => attempt.source === "html-fallback"),
+    undefined
+  );
 });
 
 test("a technical failure keeps watching for the next same-document job", async () => {
@@ -730,7 +813,9 @@ test("a technical failure keeps watching for the next same-document job", async 
   fakeWindow.location.href = jobUrl;
   navigation.currentEntry.url = jobUrl;
   setFakeJobPage(document, title, {
-    jsonLdText: createJobPostingJsonLd(title, "2026-07-21")
+    jsonLdText: createJobPostingJsonLd(title, "2026-07-21", "Meticulous", {
+      url: jobUrl
+    })
   });
   navigation.dispatch("navigatesuccess");
   frames.runNext();
@@ -741,12 +826,135 @@ test("a technical failure keeps watching for the next same-document job", async 
   assert.equal(fetchCalls, 1);
 });
 
-test("first activation uses fresh data and blocks same-title stale DOM on manual rescans", async () => {
+test("automatic SPA navigation fetches when live DOM attestation fails", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const cases = [
+    {
+      name: "missing-route-identity",
+      reason: "route-identity-missing",
+      liveJsonLd(routeUrl, title) {
+        return createJobPostingJsonLd(title, "2026-01-01");
+      }
+    },
+    {
+      name: "title-mismatch",
+      reason: "title-mismatch",
+      liveJsonLd(routeUrl) {
+        return createJobPostingJsonLd(
+          "Previous Route Engineer",
+          "2026-01-01",
+          "Meticulous",
+          { url: routeUrl }
+        );
+      }
+    },
+    {
+      name: "multiple-postings",
+      reason: "multiple-jobpostings",
+      liveJsonLd(routeUrl, title) {
+        return JSON.stringify([
+          JSON.parse(
+            createJobPostingJsonLd(title, "2026-01-01", "Meticulous", {
+              url: routeUrl
+            })
+          ),
+          JSON.parse(
+            createJobPostingJsonLd("Related Engineer", "2026-01-02", "Meticulous", {
+              url: `${routeUrl}/related`
+            })
+          )
+        ]);
+      }
+    }
+  ];
+
+  for (const testCase of cases) {
+    const routeA = `https://careers.example.com/${testCase.name}/listing`;
+    const routeB = `https://careers.example.com/${testCase.name}/job`;
+    const title = "Current Route Engineer";
+    const htmlA = `${testCase.name}-initial-html`;
+    const htmlB = `${testCase.name}-fresh-html`;
+    const document = createFakeDocument();
+    const navigation = createFakeNavigation(routeA);
+    const frames = createAnimationFrameHarness();
+    const requests = [];
+
+    setFakeJobPage(document, "Careers", { jsonLdText: "" });
+    const fakeWindow = {
+      location: { href: routeA },
+      navigation,
+      requestAnimationFrame: frames.requestAnimationFrame,
+      cancelAnimationFrame: frames.cancelAnimationFrame,
+      setTimeout,
+      clearTimeout,
+      fetch(url) {
+        requests.push(url);
+        return Promise.resolve({
+          ok: true,
+          text() {
+            return Promise.resolve(url === routeA ? htmlA : htmlB);
+          }
+        });
+      }
+    };
+    const context = vm.createContext({
+      console,
+      document,
+      DOMParser: createMappedDomParser({
+        [htmlA]: {
+          title: "Initial Engineer",
+          jsonLdText: createJobPostingJsonLd("Initial Engineer", "2026-06-01")
+        },
+        [htmlB]: {
+          title,
+          jsonLdText: createJobPostingJsonLd(title, "2026-07-23")
+        }
+      }),
+      URL,
+      window: fakeWindow
+    });
+
+    vm.runInContext(source, context);
+    await fakeWindow.JobDateLens.scanOnce();
+
+    navigation.dispatch("navigate", {
+      destination: { url: routeB, sameDocument: true },
+      hashChange: false
+    });
+    fakeWindow.location.href = routeB;
+    navigation.currentEntry.url = routeB;
+    setFakeJobPage(document, title, {
+      jsonLdText: testCase.liveJsonLd(routeB, title)
+    });
+    navigation.dispatch("navigatesuccess");
+    frames.runNext();
+    await flushAsyncWork();
+
+    const debug = fakeWindow.JobDateLens.getLastScanDebug();
+    const domAttempts = debug.attempts.filter(
+      (attempt) => attempt.source === "dom-jsonld"
+    );
+
+    assert.deepEqual(requests, [routeA, routeB], testCase.name);
+    assert.equal(domAttempts.length, 1, testCase.name);
+    assert.equal(domAttempts[0].phase, "navigation-fast-path", testCase.name);
+    assert.equal(domAttempts[0].reason, testCase.reason, testCase.name);
+    assert.equal(
+      debug.attempts.find((attempt) => attempt.source === "html-fallback").status,
+      "selected",
+      testCase.name
+    );
+  }
+});
+
+test("every manual activation uses fresh data instead of same-title live DOM", async () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   const pageUrl = "https://example.com/jobs/software-engineer";
   const title = "Software Engineer";
   const html = "fresh-same-title-job-html";
-  const staleJsonLd = createJobPostingJsonLd(title, "2026-01-01");
+  const staleJsonLd = createJobPostingJsonLd(title, "2026-01-01", "Meticulous", {
+    url: pageUrl
+  });
   const freshJsonLd = createJobPostingJsonLd(title, "2026-07-22");
   const document = createFakeDocument();
   const requests = [];
@@ -785,15 +993,236 @@ test("first activation uses fresh data and blocks same-title stale DOM on manual
   assert.equal(repeatedResult.source, "html");
   assert.deepEqual(requests, [pageUrl, pageUrl]);
   assert.equal(
-    repeatedResult.debug.attempts.find((attempt) => attempt.source === "dom-jsonld").reason,
-    "unchanged-after-navigation"
+    repeatedResult.debug.attempts.find((attempt) => attempt.source === "dom-jsonld"),
+    undefined
   );
 
   setFakeJobPage(document, title, { jsonLdText: freshJsonLd });
   const updatedDomResult = await fakeWindow.JobDateLens.scanOnce();
 
-  assert.equal(updatedDomResult.source, "dom");
-  assert.deepEqual(requests, [pageUrl, pageUrl]);
+  assert.equal(updatedDomResult.source, "html");
+  assert.deepEqual(requests, [pageUrl, pageUrl, pageUrl]);
+});
+
+test("fresh current-URL data does not require a matching live primary heading", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const title = "Current Route Engineer";
+  const staleJsonLd = createJobPostingJsonLd("Previous Route Engineer", "2026-01-01");
+  const freshJsonLd = createJobPostingJsonLd(title, "2026-07-22");
+  const cases = [
+    { name: "missing", headings: [] },
+    {
+      name: "conflicting",
+      headings: [createFakePrimaryHeading("Different Visible Role")]
+    }
+  ];
+
+  for (const testCase of cases) {
+    const pageUrl = `https://example.com/jobs/fresh-${testCase.name}`;
+    const html = `fresh-${testCase.name}-html`;
+    const document = createFakeDocument();
+
+    setFakeJobPage(document, title, {
+      jsonLdText: staleJsonLd,
+      primaryHeadings: testCase.headings
+    });
+    const fakeWindow = {
+      location: { href: pageUrl },
+      setTimeout,
+      clearTimeout,
+      fetch() {
+        return Promise.resolve({
+          ok: true,
+          text() {
+            return Promise.resolve(html);
+          }
+        });
+      }
+    };
+    const context = vm.createContext({
+      console,
+      document,
+      DOMParser: createMappedDomParser({
+        [html]: { title, jsonLdText: freshJsonLd }
+      }),
+      URL,
+      window: fakeWindow
+    });
+
+    vm.runInContext(source, context);
+    const result = await fakeWindow.JobDateLens.scanOnce();
+
+    assert.equal(result.source, "html", testCase.name);
+    assert.equal(result.found, true, testCase.name);
+    assert.equal(
+      result.debug.attempts.find((attempt) => attempt.source === "dom-jsonld"),
+      undefined,
+      testCase.name
+    );
+    assert.match(
+      getElementText(document.getElementById("jobdatelens-badge")),
+      new RegExp(title),
+      testCase.name
+    );
+  }
+});
+
+test("fresh failure re-reads and verifies the latest live primary heading", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const pageUrl = "https://example.com/jobs/late-live-fallback";
+  const title = "Late Platform Engineer";
+  const document = createFakeDocument();
+  let rejectFetch;
+
+  setFakeJobPage(document, "Loading", { jsonLdText: "", primaryHeadings: [] });
+  const fakeWindow = {
+    location: { href: pageUrl },
+    setTimeout,
+    clearTimeout,
+    getComputedStyle(element) {
+      return element.computedStyle;
+    },
+    fetch() {
+      return new Promise((resolve, reject) => {
+        rejectFetch = reject;
+      });
+    }
+  };
+  const context = vm.createContext({ console, document, URL, window: fakeWindow });
+
+  vm.runInContext(source, context);
+  const scanPromise = fakeWindow.JobDateLens.scanOnce();
+
+  setFakeJobPage(document, title, {
+    jsonLdText: createJobPostingJsonLd(title, "2026-07-22", "Meticulous", {
+      url: pageUrl
+    }),
+    primaryHeadings: [
+      createFakePrimaryHeading("Hidden Previous Role", { hidden: true }),
+      createFakePrimaryHeading(title, { tagName: "div" })
+    ]
+  });
+  assert.match(
+    getElementText(document.getElementById("jobdatelens-badge")),
+    /Loading job dates…/
+  );
+  assert.ok(
+    !getElementText(document.getElementById("jobdatelens-badge")).includes(title)
+  );
+
+  rejectFetch(new Error("Network unavailable"));
+  const result = await scanPromise;
+  const domAttempts = result.debug.attempts.filter(
+    (attempt) => attempt.source === "dom-jsonld"
+  );
+
+  assert.equal(result.source, "dom");
+  assert.equal(result.found, true);
+  assert.equal(domAttempts.length, 1);
+  assert.equal(domAttempts[0].phase, "post-fetch");
+  assert.equal(domAttempts[0].reason, "route-identity-matched");
+  assert.match(
+    getElementText(document.getElementById("jobdatelens-badge")),
+    new RegExp(title)
+  );
+});
+
+test("unverifiable primary headings cannot authorize a live fallback", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const title = "Software Engineer";
+  const liveJsonLd = createJobPostingJsonLd(title, "2026-07-22");
+  const cases = [
+    {
+      name: "hidden",
+      headings: [createFakePrimaryHeading(title, { hidden: true })],
+      reason: "missing-heading",
+      notice: /Structured job data could not be verified/
+    },
+    {
+      name: "css-hidden",
+      headings: [
+        createFakePrimaryHeading(title, {
+          computedStyle: { display: "none" }
+        })
+      ],
+      reason: "missing-heading",
+      notice: /Structured job data could not be verified/
+    },
+    {
+      name: "generic",
+      headings: [createFakePrimaryHeading("Job details")],
+      reason: "generic-heading",
+      notice: /Structured job data could not be verified/
+    },
+    {
+      name: "missing",
+      headings: [],
+      reason: "missing-heading",
+      notice: /Structured job data could not be verified/
+    },
+    {
+      name: "decorated",
+      headings: [createFakePrimaryHeading("Software Engineer — London")],
+      reason: "title-mismatch",
+      notice: /Structured job data looks stale/
+    },
+    {
+      name: "conflicting",
+      headings: [createFakePrimaryHeading("Product Manager")],
+      reason: "title-mismatch",
+      notice: /Structured job data looks stale/
+    }
+  ];
+
+  for (const testCase of cases) {
+    const pageUrl = `https://example.com/jobs/unverified-${testCase.name}`;
+    const html = `empty-${testCase.name}-html`;
+    const document = createFakeDocument();
+
+    setFakeJobPage(document, title, {
+      jsonLdText: liveJsonLd,
+      primaryHeadings: testCase.headings
+    });
+    const fakeWindow = {
+      location: { href: pageUrl },
+      setTimeout,
+      clearTimeout,
+      getComputedStyle(element) {
+        return element.computedStyle;
+      },
+      fetch() {
+        return Promise.resolve({
+          ok: true,
+          text() {
+            return Promise.resolve(html);
+          }
+        });
+      }
+    };
+    const context = vm.createContext({
+      console,
+      document,
+      DOMParser: createMappedDomParser({
+        [html]: { title, jsonLdText: "" }
+      }),
+      URL,
+      window: fakeWindow
+    });
+
+    vm.runInContext(source, context);
+    const result = await fakeWindow.JobDateLens.scanOnce();
+    const domAttempt = result.debug.attempts.find(
+      (attempt) => attempt.source === "dom-jsonld"
+    );
+
+    assert.equal(result.found, false, testCase.name);
+    assert.equal(domAttempt.reason, testCase.reason, testCase.name);
+    assert.match(
+      getElementText(document.getElementById("jobdatelens-badge")),
+      testCase.notice,
+      testCase.name
+    );
+  }
 });
 
 test("fresh failure falls back to verified live DOM and Close makes reopening fresh-first", async () => {
@@ -804,7 +1233,9 @@ test("fresh failure falls back to verified live DOM and Close makes reopening fr
   let fetchCalls = 0;
 
   setFakeJobPage(document, title, {
-    jsonLdText: createJobPostingJsonLd(title, "2026-07-22")
+    jsonLdText: createJobPostingJsonLd(title, "2026-07-22", "Meticulous", {
+      url: pageUrl
+    })
   });
   const fakeWindow = {
     location: { href: pageUrl },
@@ -825,7 +1256,7 @@ test("fresh failure falls back to verified live DOM and Close makes reopening fr
   assert.equal(firstResult.source, "dom");
   assert.equal(firstResult.found, true);
   assert.equal(sameSessionResult.source, "dom");
-  assert.equal(fetchCalls, 1);
+  assert.equal(fetchCalls, 2);
 
   findButtonByTitle(
     document.getElementById("jobdatelens-badge"),
@@ -835,7 +1266,7 @@ test("fresh failure falls back to verified live DOM and Close makes reopening fr
 
   assert.equal(reopenedResult.source, "dom");
   assert.equal(reopenedResult.found, true);
-  assert.equal(fetchCalls, 2);
+  assert.equal(fetchCalls, 3);
 });
 
 test("generic headings and multiple JobPostings remain failures when fresh data cannot resolve them", async () => {
@@ -846,6 +1277,12 @@ test("generic headings and multiple JobPostings remain failures when fresh data 
   const multipleHtml = "multiple-jobposting-html";
   const title = "Software Engineer";
   const firstPosting = createJobPostingJsonLd(title, "2026-07-01");
+  const attestedLivePosting = createJobPostingJsonLd(
+    title,
+    "2026-07-01",
+    "Meticulous",
+    { url: multipleUrl }
+  );
   const secondPosting = createJobPostingJsonLd("Product Engineer", "2026-07-02");
   const multipleJsonLd = JSON.stringify([
     JSON.parse(firstPosting),
@@ -900,18 +1337,24 @@ test("generic headings and multiple JobPostings remain failures when fresh data 
   const multiple = await runFailure(
     multipleUrl,
     title,
-    multipleJsonLd,
+    attestedLivePosting,
     multipleHtml,
     multipleJsonLd
   );
   assert.equal(multiple.result.found, false);
+  assert.equal(
+    multiple.result.debug.attempts.find(
+      (attempt) => attempt.source === "dom-jsonld"
+    ),
+    undefined
+  );
   assert.match(
     getElementText(multiple.document.getElementById("jobdatelens-badge")),
     /Multiple job entries found/
   );
 });
 
-test("Ashby SPA navigation and later manual scans reject route-proven stale JSON-LD", async () => {
+test("Ashby SPA navigation and later manual scans always refresh the current route", async () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   const routeA =
     "https://jobs.ashbyhq.com/meticulous/e6d1e0ab-8a28-49ee-94ed-d232886cd7d5";
@@ -967,8 +1410,8 @@ test("Ashby SPA navigation and later manual scans reject route-proven stale JSON
   await fakeWindow.JobDateLens.scanOnce();
 
   const directRepeat = await fakeWindow.JobDateLens.scanOnce();
-  assert.equal(directRepeat.source, "dom");
-  assert.deepEqual(currentPageRequests, [routeA]);
+  assert.equal(directRepeat.source, "html");
+  assert.deepEqual(currentPageRequests, [routeA, routeA]);
 
   let badge = document.getElementById("jobdatelens-badge");
   findButtonByTitle(badge, "Collapse JobDateLens").click();
@@ -993,17 +1436,21 @@ test("Ashby SPA navigation and later manual scans reject route-proven stale JSON
   navigation.dispatch("navigatesuccess");
 
   assert.equal(frames.pendingCount(), 1);
-  assert.equal(currentPageRequests.length, 1);
+  assert.equal(currentPageRequests.length, 2);
   assert.equal(frames.runNext(), true);
   await flushAsyncWork();
 
   badge = document.getElementById("jobdatelens-badge");
   const debug = fakeWindow.JobDateLens.getLastScanDebug();
-  const domAttempt = debug.attempts.find((attempt) => attempt.source === "dom-jsonld");
 
-  assert.deepEqual(currentPageRequests, [routeA, routeB]);
-  assert.equal(domAttempt.status, "no-match");
-  assert.equal(domAttempt.reason, "unchanged-after-navigation");
+  assert.deepEqual(currentPageRequests, [routeA, routeA, routeB]);
+  const fastDomAttempt = debug.attempts.find(
+    (attempt) =>
+      attempt.source === "dom-jsonld" &&
+      attempt.phase === "navigation-fast-path"
+  );
+  assert.equal(fastDomAttempt.status, "no-match");
+  assert.equal(fastDomAttempt.reason, "unchanged-after-navigation");
   assert.equal(badge.attributes["aria-busy"], "false");
   assert.match(getElementText(badge), new RegExp(titleB));
   assert.ok(!getElementText(badge).includes(titleA));
@@ -1020,34 +1467,125 @@ test("Ashby SPA navigation and later manual scans reject route-proven stale JSON
   badge = document.getElementById("jobdatelens-badge");
 
   assert.equal(firstManualResult.source, "html");
-  assert.deepEqual(currentPageRequests, [routeA, routeB, routeB]);
+  assert.deepEqual(currentPageRequests, [routeA, routeA, routeB, routeB]);
   assert.match(getElementText(badge), new RegExp(titleB));
   assert.ok(!getElementText(badge).includes(titleA));
-  assert.equal(
-    fakeWindow.JobDateLens
-      .getLastScanDebug()
-      .attempts.find((attempt) => attempt.source === "dom-jsonld").reason,
-    "unchanged-after-navigation"
-  );
 
   const secondManualResult = await fakeWindow.JobDateLens.scanOnce();
 
   assert.equal(secondManualResult.source, "html");
-  assert.deepEqual(currentPageRequests, [routeA, routeB, routeB, routeB]);
+  assert.deepEqual(currentPageRequests, [routeA, routeA, routeB, routeB, routeB]);
   assert.match(getElementText(badge), new RegExp(titleB));
   assert.ok(!getElementText(badge).includes(titleA));
 
   setFakeJobPage(document, titleB, { jsonLdText: jsonLdB });
   const updatedDomResult = await fakeWindow.JobDateLens.scanOnce();
 
-  assert.equal(updatedDomResult.source, "dom");
-  assert.deepEqual(currentPageRequests, [routeA, routeB, routeB, routeB]);
+  assert.equal(updatedDomResult.source, "html");
+  assert.deepEqual(currentPageRequests, [
+    routeA,
+    routeA,
+    routeB,
+    routeB,
+    routeB,
+    routeB
+  ]);
   assert.match(getElementText(badge), new RegExp(titleB));
 
   const updatedDomRepeat = await fakeWindow.JobDateLens.scanOnce();
 
-  assert.equal(updatedDomRepeat.source, "dom");
-  assert.deepEqual(currentPageRequests, [routeA, routeB, routeB, routeB]);
+  assert.equal(updatedDomRepeat.source, "html");
+  assert.deepEqual(currentPageRequests, [
+    routeA,
+    routeA,
+    routeB,
+    routeB,
+    routeB,
+    routeB,
+    routeB
+  ]);
+});
+
+test("a route stale fingerprint survives fresh success and blocks a same-title live fallback", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const routeA = "https://example.com/jobs/software-engineer-a";
+  const routeB = "https://example.com/jobs/software-engineer-b";
+  const title = "Software Engineer";
+  const htmlA = "same-title-job-a-html";
+  const htmlB = "same-title-job-b-html";
+  const jsonLdA = createJobPostingJsonLd(title, "2026-06-01");
+  const jsonLdB = createJobPostingJsonLd(title, "2026-07-02");
+  const document = createFakeDocument();
+  const navigation = createFakeNavigation(routeA);
+  const frames = createAnimationFrameHarness();
+  const requests = [];
+  let failRouteB = false;
+
+  setFakeJobPage(document, title, { jsonLdText: jsonLdA });
+  const fakeWindow = {
+    location: { href: routeA },
+    navigation,
+    requestAnimationFrame: frames.requestAnimationFrame,
+    cancelAnimationFrame: frames.cancelAnimationFrame,
+    setTimeout,
+    clearTimeout,
+    fetch(url) {
+      requests.push(url);
+      if (failRouteB && url === routeB) {
+        return Promise.reject(new Error("Network unavailable"));
+      }
+      return Promise.resolve({
+        ok: true,
+        text() {
+          return Promise.resolve(url === routeA ? htmlA : htmlB);
+        }
+      });
+    }
+  };
+  const context = vm.createContext({
+    console,
+    document,
+    DOMParser: createMappedDomParser({
+      [htmlA]: { title, jsonLdText: jsonLdA },
+      [htmlB]: { title, jsonLdText: jsonLdB }
+    }),
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+  await fakeWindow.JobDateLens.scanOnce();
+
+  navigation.dispatch("navigate", {
+    destination: { url: routeB, sameDocument: true },
+    hashChange: false
+  });
+  fakeWindow.location.href = routeB;
+  navigation.currentEntry.url = routeB;
+  setFakeJobPage(document, title);
+  navigation.dispatch("navigatesuccess");
+  frames.runNext();
+  await flushAsyncWork();
+
+  assert.deepEqual(requests, [routeA, routeB]);
+  assert.match(
+    getElementText(document.getElementById("jobdatelens-badge")),
+    new RegExp(title)
+  );
+
+  failRouteB = true;
+  const failedRefresh = await fakeWindow.JobDateLens.scanOnce();
+  const domAttempt = failedRefresh.debug.attempts.find(
+    (attempt) => attempt.source === "dom-jsonld"
+  );
+
+  assert.equal(failedRefresh.found, false);
+  assert.deepEqual(requests, [routeA, routeB, routeB]);
+  assert.equal(domAttempt.reason, "unchanged-after-navigation");
+  assert.match(
+    getElementText(document.getElementById("jobdatelens-badge")),
+    /Structured job data looks stale/
+  );
 });
 
 test("manual activation shares a pending SPA frame and in-flight route scan", async () => {
@@ -1125,7 +1663,11 @@ test("manual activation shares a pending SPA frame and in-flight route scan", as
   });
   fakeWindow.location.href = routeB;
   navigation.currentEntry.url = routeB;
-  setFakeJobPage(document, titleB);
+  setFakeJobPage(document, titleB, {
+    jsonLdText: createJobPostingJsonLd(titleB, "2026-01-01", "Meticulous", {
+      url: routeB
+    })
+  });
   navigation.dispatch("navigatesuccess");
 
   const pendingFrameScan = fakeWindow.JobDateLens.scanOnce();
@@ -1154,6 +1696,12 @@ test("manual activation shares a pending SPA frame and in-flight route scan", as
   assert.strictEqual(inFlightResult, pendingResult);
   assert.equal(pendingResult.source, "html");
   assert.equal(fetchCalls, 2);
+  assert.equal(
+    pendingResult.debug.attempts.find(
+      (attempt) => attempt.phase === "navigation-fast-path"
+    ),
+    undefined
+  );
   assert.match(
     getElementText(document.getElementById("jobdatelens-badge")),
     new RegExp(titleB)
@@ -1174,6 +1722,7 @@ test("manual activation guards a changed route when its Navigation API event was
   const jsonLdB = createJobPostingJsonLd(titleB, "2026-07-02");
   const document = createFakeDocument();
   const requests = [];
+  let failRouteB = false;
 
   setFakeJobPage(document, titleA, {
     jsonLdText: jsonLdA
@@ -1184,6 +1733,9 @@ test("manual activation guards a changed route when its Navigation API event was
     clearTimeout,
     fetch(url) {
       requests.push(url);
+      if (failRouteB && url === routeB) {
+        return Promise.reject(new Error("Network unavailable"));
+      }
       return Promise.resolve({
         ok: true,
         text() {
@@ -1215,16 +1767,30 @@ test("manual activation guards a changed route when its Navigation API event was
   fakeWindow.location.href = routeB;
   setFakeJobPage(document, titleB);
   const result = await fakeWindow.JobDateLens.scanOnce();
-  const domAttempt = result.debug.attempts.find(
-    (attempt) => attempt.source === "dom-jsonld"
-  );
 
   assert.equal(result.source, "html");
   assert.deepEqual(requests, [routeA, routeB]);
-  assert.equal(domAttempt.reason, "unchanged-after-navigation");
+  assert.equal(
+    result.debug.attempts.find((attempt) => attempt.source === "dom-jsonld"),
+    undefined
+  );
   assert.match(
     getElementText(document.getElementById("jobdatelens-badge")),
     new RegExp(titleB)
+  );
+
+  failRouteB = true;
+  const failedRefresh = await fakeWindow.JobDateLens.scanOnce();
+  const domAttempt = failedRefresh.debug.attempts.find(
+    (attempt) => attempt.source === "dom-jsonld"
+  );
+
+  assert.equal(failedRefresh.found, false);
+  assert.deepEqual(requests, [routeA, routeB, routeB]);
+  assert.equal(domAttempt.reason, "unchanged-after-navigation");
+  assert.match(
+    getElementText(document.getElementById("jobdatelens-badge")),
+    /Structured job data looks stale/
   );
 });
 
@@ -1239,7 +1805,9 @@ test("navigation filtering ignores hashes and full documents, and Close cancels 
   const frames = createAnimationFrameHarness();
 
   setFakeJobPage(document, titleA, {
-    jsonLdText: createJobPostingJsonLd(titleA, "2026-06-01")
+    jsonLdText: createJobPostingJsonLd(titleA, "2026-06-01", "Meticulous", {
+      url: routeA
+    })
   });
   const fakeWindow = {
     location: { href: routeA },
@@ -1509,6 +2077,11 @@ test("failed SPA refresh offers one user-triggered Retry and keeps Close availab
   const retryButton = findButtonByText(badge, "Retry");
   assert.ok(retryButton);
 
+  setFakeJobPage(document, titleB, {
+    jsonLdText: createJobPostingJsonLd(titleB, "2026-01-01", "Meticulous", {
+      url: routeB
+    })
+  });
   retryButton.click();
   retryButton.click();
   badge = document.getElementById("jobdatelens-badge");
@@ -1523,6 +2096,13 @@ test("failed SPA refresh offers one user-triggered Retry and keeps Close availab
   assert.equal(badge.attributes["aria-busy"], "false");
   assert.match(getElementText(badge), new RegExp(titleB));
   assert.equal(findButtonByText(badge, "Retry"), null);
+  assert.equal(fakeWindow.JobDateLens.getLastScanDebug().selectedSource, "html-fallback");
+  assert.equal(
+    fakeWindow.JobDateLens.getLastScanDebug().attempts.find(
+      (attempt) => attempt.phase === "navigation-fast-path"
+    ),
+    undefined
+  );
 });
 
 test("scanOnce treats failed HTML fallback after navigation as superseded", async () => {
@@ -1673,6 +2253,188 @@ test("scanOnce keeps non-Lever apply pages on current URL HTML fallback", async 
   assert.equal(fetchOptions.headers.Accept, fakeWindow.JobDateLens.HTML_ACCEPT_HEADER);
   assert.equal(result.found, false);
   assert.equal(result.reason, "html-no-match");
+});
+
+test("canonical response redirects remain trusted", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const pageUrl =
+    "https://careers.example.com/jobs/platform/?utm_source=email&gclid=click#details";
+  const finalUrl = "https://careers.example.com/jobs/platform";
+  const html = "canonical-redirect-html";
+  const title = "Platform Engineer";
+  const document = createFakeDocument();
+
+  setFakeJobPage(document, title, { jsonLdText: "" });
+  const fakeWindow = {
+    location: { href: pageUrl },
+    setTimeout,
+    clearTimeout,
+    fetch() {
+      return Promise.resolve({
+        ok: true,
+        url: finalUrl,
+        text() {
+          return Promise.resolve(html);
+        }
+      });
+    }
+  };
+  const context = vm.createContext({
+    console,
+    document,
+    DOMParser: createMappedDomParser({
+      [html]: {
+        title,
+        jsonLdText: createJobPostingJsonLd(title, "2026-07-23")
+      }
+    }),
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+  const result = await fakeWindow.JobDateLens.scanOnce();
+  const htmlAttempt = result.debug.attempts.find(
+    (attempt) => attempt.source === "html-fallback"
+  );
+
+  assert.equal(result.found, true);
+  assert.equal(result.source, "html");
+  assert.equal(htmlAttempt.response.route, "response-route-matched");
+  assert.equal(htmlAttempt.response.finalUrl, finalUrl);
+});
+
+test("login, checkpoint, generic, and different-job redirects fail route validation", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const cases = [
+    ["login", "https://careers.example.com/login"],
+    ["checkpoint", "https://careers.example.com/checkpoint/security"],
+    ["generic", "https://careers.example.com/jobs"],
+    ["different-job", "https://careers.example.com/jobs/other-role"]
+  ];
+
+  for (const [name, finalUrl] of cases) {
+    const pageUrl = `https://careers.example.com/jobs/${name}-engineer`;
+    const document = createFakeDocument();
+    let bodyRead = false;
+
+    setFakeJobPage(document, `${name} Engineer`, { jsonLdText: "" });
+    const fakeWindow = {
+      location: { href: pageUrl },
+      setTimeout,
+      clearTimeout,
+      fetch() {
+        return Promise.resolve({
+          ok: true,
+          url: finalUrl,
+          text() {
+            bodyRead = true;
+            return Promise.resolve("untrusted-redirect-html");
+          }
+        });
+      }
+    };
+    const context = vm.createContext({ console, document, URL, window: fakeWindow });
+
+    vm.runInContext(source, context);
+    const result = await fakeWindow.JobDateLens.scanOnce();
+    const htmlAttempt = result.debug.attempts.find(
+      (attempt) => attempt.source === "html-fallback"
+    );
+    const domAttempts = result.debug.attempts.filter(
+      (attempt) => attempt.source === "dom-jsonld"
+    );
+
+    assert.equal(result.found, false, name);
+    assert.equal(result.reason, "response-route-mismatch", name);
+    assert.equal(htmlAttempt.status, "failed", name);
+    assert.equal(htmlAttempt.reason, "response-route-mismatch", name);
+    assert.equal(htmlAttempt.response.finalUrl, finalUrl, name);
+    assert.equal(domAttempts.length, 1, name);
+    assert.equal(domAttempts[0].phase, "post-fetch", name);
+    assert.equal(bodyRead, false, name);
+  }
+});
+
+test("Greenhouse SPA navigation stays API-first and then accepts attested live DOM", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const routeA = "https://job-boards.greenhouse.io/pallet/jobs/5169663007";
+  const routeB = "https://job-boards.greenhouse.io/pallet/jobs/5169663008";
+  const apiA = "https://boards-api.greenhouse.io/v1/boards/pallet/jobs/5169663007";
+  const apiB = "https://boards-api.greenhouse.io/v1/boards/pallet/jobs/5169663008";
+  const titleA = "Initial Greenhouse Engineer";
+  const titleB = "New Greenhouse Engineer";
+  const document = createFakeDocument();
+  const navigation = createFakeNavigation(routeA);
+  const frames = createAnimationFrameHarness();
+  const requests = [];
+
+  setFakeJobPage(document, titleA, { jsonLdText: "" });
+  const fakeWindow = {
+    location: { href: routeA },
+    navigation,
+    requestAnimationFrame: frames.requestAnimationFrame,
+    cancelAnimationFrame: frames.cancelAnimationFrame,
+    setTimeout,
+    clearTimeout,
+    fetch(url) {
+      requests.push(url);
+      assert.ok(url === apiA || url === apiB);
+      return Promise.resolve({
+        ok: true,
+        url,
+        json() {
+          return Promise.resolve(
+            url === apiA
+              ? {
+                  title: titleA,
+                  company_name: "Pallet",
+                  first_published: "2026-06-01T10:00:00Z"
+                }
+              : {}
+          );
+        }
+      });
+    }
+  };
+  const context = vm.createContext({ console, document, URL, window: fakeWindow });
+
+  vm.runInContext(source, context);
+  await fakeWindow.JobDateLens.scanOnce();
+
+  navigation.dispatch("navigate", {
+    destination: { url: routeB, sameDocument: true },
+    hashChange: false
+  });
+  fakeWindow.location.href = routeB;
+  navigation.currentEntry.url = routeB;
+  setFakeJobPage(document, titleB, {
+    jsonLdText: createJobPostingJsonLd(titleB, "2026-07-22", "Pallet", {
+      url: routeB
+    })
+  });
+  navigation.dispatch("navigatesuccess");
+  frames.runNext();
+  await flushAsyncWork();
+
+  const debug = fakeWindow.JobDateLens.getLastScanDebug();
+  const greenhouseAttempt = debug.attempts.find(
+    (attempt) => attempt.source === "greenhouse-api"
+  );
+  const domAttempts = debug.attempts.filter(
+    (attempt) => attempt.source === "dom-jsonld"
+  );
+
+  assert.deepEqual(requests, [apiA, apiB]);
+  assert.equal(greenhouseAttempt.status, "no-match");
+  assert.equal(domAttempts.length, 1);
+  assert.equal(domAttempts[0].phase, "post-fetch");
+  assert.equal(domAttempts[0].status, "selected");
+  assert.equal(domAttempts[0].reason, "route-identity-matched");
+  assert.match(
+    getElementText(document.getElementById("jobdatelens-badge")),
+    new RegExp(titleB)
+  );
 });
 
 test("scanOnce fetches direct Greenhouse public API dates", async () => {

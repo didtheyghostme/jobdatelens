@@ -54,6 +54,96 @@ function normalizeNavigationUrl(url) {
   }
 }
 
+function normalizeFetchRouteUrl(value) {
+  var parsed;
+  var trackingKeys = [];
+
+  try {
+    parsed = new URL(String(value || ""));
+  } catch (error) {
+    return "";
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return "";
+  }
+
+  parsed.hash = "";
+  parsed.searchParams.forEach(function (_value, key) {
+    var normalizedKey = key.toLowerCase();
+
+    if (
+      (normalizedKey.indexOf("utm_") === 0 ||
+        normalizedKey === "gclid" ||
+        normalizedKey === "fbclid" ||
+        normalizedKey === "msclkid") &&
+      trackingKeys.indexOf(key) === -1
+    ) {
+      trackingKeys.push(key);
+    }
+  });
+  trackingKeys.forEach(function (key) {
+    parsed.searchParams.delete(key);
+  });
+  parsed.searchParams.sort();
+  parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+
+  return parsed.origin + parsed.pathname + parsed.search;
+}
+
+function createResponseRouteMismatch(requestedUrl, finalUrl) {
+  return {
+    ok: false,
+    code: "response-route-mismatch",
+    message: "Fetched response did not match the requested job route.",
+    url: requestedUrl,
+    finalUrl: finalUrl
+  };
+}
+
+function fetchedRouteMatches(requestedUrl, finalUrl, provider) {
+  var normalizedRequested = normalizeFetchRouteUrl(requestedUrl);
+  var normalizedFinal = normalizeFetchRouteUrl(finalUrl);
+  var requestedProviderUrl;
+  var finalProviderUrl;
+
+  if (!normalizedRequested || !normalizedFinal) {
+    return false;
+  }
+  if (normalizedRequested === normalizedFinal) {
+    return true;
+  }
+  if (provider === "lever") {
+    requestedProviderUrl = getCanonicalLeverPostingUrl(normalizedRequested);
+    finalProviderUrl = getCanonicalLeverPostingUrl(normalizedFinal);
+    return Boolean(
+      requestedProviderUrl &&
+        finalProviderUrl &&
+        requestedProviderUrl === finalProviderUrl
+    );
+  }
+  if (provider === "ashby") {
+    requestedProviderUrl = getCanonicalAshbyJobPostingUrl(normalizedRequested);
+    finalProviderUrl = getCanonicalAshbyJobPostingUrl(normalizedFinal);
+    return Boolean(
+      requestedProviderUrl &&
+        finalProviderUrl &&
+        requestedProviderUrl === finalProviderUrl
+    );
+  }
+
+  return false;
+}
+
+function createHttpFetchFailure(response, requestedUrl, finalUrl) {
+  return {
+    ok: false,
+    message: "HTTP " + response.status,
+    url: requestedUrl,
+    finalUrl: finalUrl
+  };
+}
+
 function createSessionToken() {
   if (
     typeof crypto !== "undefined" &&
@@ -773,6 +863,7 @@ async function handleFetchHtmlFallbackMessage(request, fetchImpl) {
   var fallbackUrl = getCanonicalLeverPostingUrl(request && request.url);
   var fetcher;
   var response;
+  var finalUrl;
   var htmlText;
 
   if (!fallbackUrl) {
@@ -793,18 +884,20 @@ async function handleFetchHtmlFallbackMessage(request, fetchImpl) {
       }
     });
 
+    finalUrl = response.url || fallbackUrl;
+    if (!fetchedRouteMatches(fallbackUrl, finalUrl, "lever")) {
+      return createResponseRouteMismatch(fallbackUrl, finalUrl);
+    }
     if (!response.ok) {
-      return {
-        ok: false,
-        message: "HTTP " + response.status
-      };
+      return createHttpFetchFailure(response, fallbackUrl, finalUrl);
     }
 
     htmlText = await response.text();
     return {
       ok: true,
       htmlText: htmlText,
-      url: fallbackUrl
+      url: fallbackUrl,
+      finalUrl: finalUrl
     };
   } catch (error) {
     return {
@@ -820,9 +913,11 @@ async function handleFetchYcJobPostingMessage(request, fetchImpl) {
   var companyUrl;
   var fetcher;
   var companyResponse;
+  var companyFinalUrl;
   var companyHtml;
   var jobUrl;
   var jobResponse;
+  var jobFinalUrl;
   var jobHtml;
   var fetchOptions = {
     cache: "no-store",
@@ -844,11 +939,16 @@ async function handleFetchYcJobPostingMessage(request, fetchImpl) {
 
   try {
     companyResponse = await fetcher(companyUrl, fetchOptions);
+    companyFinalUrl = companyResponse.url || companyUrl;
+    if (!fetchedRouteMatches(companyUrl, companyFinalUrl)) {
+      return createResponseRouteMismatch(companyUrl, companyFinalUrl);
+    }
     if (!companyResponse.ok) {
-      return {
-        ok: false,
-        message: "HTTP " + companyResponse.status
-      };
+      return createHttpFetchFailure(
+        companyResponse,
+        companyUrl,
+        companyFinalUrl
+      );
     }
 
     companyHtml = await companyResponse.text();
@@ -861,18 +961,20 @@ async function handleFetchYcJobPostingMessage(request, fetchImpl) {
     }
 
     jobResponse = await fetcher(jobUrl, fetchOptions);
+    jobFinalUrl = jobResponse.url || jobUrl;
+    if (!fetchedRouteMatches(jobUrl, jobFinalUrl)) {
+      return createResponseRouteMismatch(jobUrl, jobFinalUrl);
+    }
     if (!jobResponse.ok) {
-      return {
-        ok: false,
-        message: "HTTP " + jobResponse.status
-      };
+      return createHttpFetchFailure(jobResponse, jobUrl, jobFinalUrl);
     }
 
     jobHtml = await jobResponse.text();
     return {
       ok: true,
       htmlText: jobHtml,
-      url: jobUrl
+      url: jobUrl,
+      finalUrl: jobFinalUrl
     };
   } catch (error) {
     return {
@@ -886,6 +988,7 @@ async function handleFetchAshbyJobPostingMessage(request, fetchImpl) {
   var jobUrl = getCanonicalAshbyJobPostingUrl(request && request.jobUrl);
   var fetcher;
   var response;
+  var finalUrl;
   var htmlText;
 
   if (!jobUrl) {
@@ -906,18 +1009,20 @@ async function handleFetchAshbyJobPostingMessage(request, fetchImpl) {
       }
     });
 
+    finalUrl = response.url || jobUrl;
+    if (!fetchedRouteMatches(jobUrl, finalUrl, "ashby")) {
+      return createResponseRouteMismatch(jobUrl, finalUrl);
+    }
     if (!response.ok) {
-      return {
-        ok: false,
-        message: "HTTP " + response.status
-      };
+      return createHttpFetchFailure(response, jobUrl, finalUrl);
     }
 
     htmlText = await response.text();
     return {
       ok: true,
       htmlText: htmlText,
-      url: jobUrl
+      url: jobUrl,
+      finalUrl: finalUrl
     };
   } catch (error) {
     return {

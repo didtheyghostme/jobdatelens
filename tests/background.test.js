@@ -156,7 +156,8 @@ test("fetches validated Lever fallback HTML through the background handler", asy
   assert.deepEqual(response, {
     ok: true,
     htmlText: "<!doctype html>",
-    url: canonicalUrl
+    url: canonicalUrl,
+    finalUrl: canonicalUrl
   });
 });
 
@@ -255,7 +256,8 @@ test("fetches validated Ashby job HTML through the background handler", async ()
   assert.deepEqual(response, {
     ok: true,
     htmlText: "<!doctype html><script></script>",
-    url: jobUrl
+    url: jobUrl,
+    finalUrl: jobUrl
   });
 });
 
@@ -362,7 +364,34 @@ test("fetches YC job HTML after finding an exact WAAS job id on the YC company p
   assert.deepEqual(response, {
     ok: true,
     htmlText: jobHtml,
-    url: jobUrl
+    url: jobUrl,
+    finalUrl: jobUrl
+  });
+});
+
+test("carries and rejects a provider response's mismatched final URL", async () => {
+  const jobId = "0cd9781c-e158-4b0c-9979-04ead270933a";
+  const jobUrl = `https://jobs.ashbyhq.com/acme/${jobId}?embed=js`;
+  const finalUrl = "https://jobs.ashbyhq.com/login";
+
+  const response = await background.handleFetchAshbyJobPostingMessage(
+    {
+      type: background.FETCH_ASHBY_JOB_POSTING_MESSAGE,
+      jobUrl
+    },
+    async () => ({
+      ok: true,
+      url: finalUrl,
+      text: async () => "<!doctype html>"
+    })
+  );
+
+  assert.deepEqual(response, {
+    ok: false,
+    code: "response-route-mismatch",
+    message: "Fetched response did not match the requested job route.",
+    url: jobUrl,
+    finalUrl
   });
 });
 
@@ -391,6 +420,40 @@ test("does not fetch a YC job page when the YC company page has no exact WAAS id
   });
 });
 
+test("rejects a redirected YC company response before reading or deriving a job", async () => {
+  const companyUrl = "https://www.ycombinator.com/companies/ruma-care";
+  const loginUrl = "https://www.ycombinator.com/login";
+  let bodyRead = false;
+
+  const response = await background.handleFetchYcJobPostingMessage(
+    {
+      type: background.FETCH_YC_JOB_POSTING_MESSAGE,
+      jobId: 97127,
+      companySlug: "ruma-care"
+    },
+    async (url) => {
+      assert.equal(url, companyUrl);
+      return {
+        ok: true,
+        url: loginUrl,
+        text: async () => {
+          bodyRead = true;
+          return "";
+        }
+      };
+    }
+  );
+
+  assert.equal(bodyRead, false);
+  assert.deepEqual(response, {
+    ok: false,
+    code: "response-route-mismatch",
+    message: "Fetched response did not match the requested job route.",
+    url: companyUrl,
+    finalUrl: loginUrl
+  });
+});
+
 test("returns a YC lookup failure when the YC company fetch fails", async () => {
   const response = await background.handleFetchYcJobPostingMessage(
     {
@@ -409,7 +472,9 @@ test("returns a YC lookup failure when the YC company fetch fails", async () => 
 
   assert.deepEqual(response, {
     ok: false,
-    message: "HTTP 503"
+    message: "HTTP 503",
+    url: "https://www.ycombinator.com/companies/ruma-care",
+    finalUrl: "https://www.ycombinator.com/companies/ruma-care"
   });
 });
 

@@ -121,6 +121,128 @@ test("exports tuned timing constants", () => {
   assert.equal(jobDateLens.TRANSIENT_NOTICE_DURATION_MS, 3000);
 });
 
+test("normalizes job routes without dropping identity query parameters", () => {
+  const pageUrl =
+    "https://Careers.Example.com:443/jobs/platform/?team=core&gh_jid=42&utm_source=email#details";
+
+  assert.equal(
+    jobDateLens.normalizeJobRouteUrl(pageUrl),
+    "https://careers.example.com/jobs/platform?gh_jid=42&team=core"
+  );
+  assert.equal(
+    jobDateLens.normalizeJobRouteUrl(
+      "../platform/?team=core&gh_jid=42&gclid=click&fbclid=share&msclkid=ad#apply",
+      "https://careers.example.com/jobs/other/"
+    ),
+    "https://careers.example.com/jobs/platform?gh_jid=42&team=core"
+  );
+  assert.equal(
+    jobDateLens.normalizeJobRouteUrl(
+      "/jobs/platform?ashby_jid=abc&utm_custom=value&source=ref",
+      "https://careers.example.com/openings"
+    ),
+    "https://careers.example.com/jobs/platform?ashby_jid=abc&source=ref"
+  );
+});
+
+test("route normalization preserves identity differences in origin and query", () => {
+  const route = "https://careers.example.com:8443/jobs/42?team=core";
+
+  assert.notEqual(
+    jobDateLens.normalizeJobRouteUrl(route),
+    jobDateLens.normalizeJobRouteUrl("http://careers.example.com:8443/jobs/42?team=core")
+  );
+  assert.notEqual(
+    jobDateLens.normalizeJobRouteUrl(route),
+    jobDateLens.normalizeJobRouteUrl("https://jobs.example.com:8443/jobs/42?team=core")
+  );
+  assert.notEqual(
+    jobDateLens.normalizeJobRouteUrl(route),
+    jobDateLens.normalizeJobRouteUrl("https://careers.example.com/jobs/42?team=core")
+  );
+  assert.notEqual(
+    jobDateLens.normalizeJobRouteUrl(route),
+    jobDateLens.normalizeJobRouteUrl("https://careers.example.com:8443/jobs/42?team=other")
+  );
+});
+
+test("attests live JobPosting routes from schema url and URL-like @id", () => {
+  const pageUrl = "https://careers.example.com/jobs/platform?team=core&utm_source=email";
+  const relative = jobDateLens.getJobPostingRouteAttestation(
+    jobPosting({ url: "/jobs/platform?team=core#apply" }),
+    pageUrl
+  );
+  const schemaId = jobDateLens.getJobPostingRouteAttestation(
+    jobPosting({ "@id": "./platform/?team=core&gclid=ignored" }),
+    "https://careers.example.com/jobs/platform?team=core"
+  );
+
+  assert.equal(relative.trusted, true);
+  assert.equal(relative.reason, "route-identity-matched");
+  assert.equal(relative.proof, "schema-url");
+  assert.equal(schemaId.trusted, true);
+  assert.equal(schemaId.proof, "schema-url");
+});
+
+test("distinguishes missing and mismatched live route identity", () => {
+  const pageUrl = "https://careers.example.com/jobs/platform?team=core";
+  const missing = jobDateLens.getJobPostingRouteAttestation(
+    jobPosting({ "@id": "#jobposting", url: "#job-url" }),
+    pageUrl
+  );
+  const mismatchedQuery = jobDateLens.getJobPostingRouteAttestation(
+    jobPosting({ url: "/jobs/platform?team=growth" }),
+    pageUrl
+  );
+  const mismatchedOrigin = jobDateLens.getJobPostingRouteAttestation(
+    jobPosting({ url: "https://other.example.com/jobs/platform?team=core" }),
+    pageUrl
+  );
+
+  assert.equal(missing.trusted, false);
+  assert.equal(missing.reason, "route-identity-missing");
+  assert.equal(mismatchedQuery.trusted, false);
+  assert.equal(mismatchedQuery.reason, "route-identity-mismatch");
+  assert.equal(mismatchedOrigin.trusted, false);
+  assert.equal(mismatchedOrigin.reason, "route-identity-mismatch");
+});
+
+test("attests schema identifiers only through a provider id parsed from the route", () => {
+  const ashbyId = "0cd9781c-e158-4b0c-9979-04ead270933a";
+  const ashbyPage = `https://jobs.ashbyhq.com/acme/${ashbyId}`;
+  const ashbyMatch = jobDateLens.getJobPostingRouteAttestation(
+    jobPosting({
+      identifier: { "@type": "PropertyValue", value: ashbyId }
+    }),
+    ashbyPage
+  );
+  const greenhouseMatch = jobDateLens.getJobPostingRouteAttestation(
+    jobPosting({ identifier: { value: "7724653" } }),
+    "https://careers.example.com/jobs/ripple?gh_jid=7724653"
+  );
+  const ycMatch = jobDateLens.getJobPostingRouteAttestation(
+    jobPosting({ identifier: 97127 }),
+    "https://www.workatastartup.com/jobs/97127"
+  );
+  const wrongAshby = jobDateLens.getJobPostingRouteAttestation(
+    jobPosting({ identifier: "18ab8f7f-e950-4f8d-a525-9e21c7f8940d" }),
+    ashbyPage
+  );
+  const genericNumber = jobDateLens.getJobPostingRouteAttestation(
+    jobPosting({ identifier: "97127" }),
+    "https://careers.example.com/jobs/97127"
+  );
+
+  assert.equal(ashbyMatch.trusted, true);
+  assert.equal(ashbyMatch.proof, "provider-job-id");
+  assert.equal(greenhouseMatch.trusted, true);
+  assert.equal(greenhouseMatch.provider, "greenhouse");
+  assert.equal(ycMatch.trusted, true);
+  assert.equal(ycMatch.provider, "yc");
+  assert.equal(wrongAshby.reason, "route-identity-mismatch");
+  assert.equal(genericNumber.reason, "route-identity-missing");
+});
+
 test("does not select anything without JSON-LD", () => {
   const result = scan([]);
 
