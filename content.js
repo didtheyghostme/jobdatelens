@@ -537,7 +537,7 @@
     return {
       message: "Current page HTML could not be fetched",
       helper:
-        "JobDateLens could not re-read this URL's server HTML. Reload the page, then press the shortcut again." +
+        "JobDateLens could not re-read this URL's server HTML. Reload the page or scan again." +
         (message ? " (" + message + ")" : "")
     };
   }
@@ -2851,7 +2851,7 @@
       var helperNode;
       var actionConfig =
         typeof action === "function"
-          ? { label: "Retry", callback: action }
+          ? { label: "Scan again", callback: action }
           : action;
       var actionButton;
 
@@ -2881,7 +2881,7 @@
         actionButton = document.createElement("button");
         actionButton.type = "button";
         actionButton.className = "jdl-state-button";
-        actionButton.textContent = actionConfig.label || "Retry";
+        actionButton.textContent = actionConfig.label || "Scan again";
         actionButton.addEventListener("click", actionConfig.callback);
         copy.appendChild(actionButton);
       }
@@ -2929,7 +2929,7 @@
       );
     }
 
-    function renderNoDataBadge(checkAgainCallback) {
+    function renderNoDataBadge(scanAgainCallback) {
       var badge;
 
       if (!document.body) {
@@ -2938,17 +2938,17 @@
 
       removeNotice();
       badge = getOrCreateBadge();
-      badge.className = "jdl-badge jdl-status--watching";
+      badge.className = "jdl-badge jdl-status--on";
       badge.setAttribute("aria-busy", "false");
       badge.replaceChildren(
-        createBadgeHeader("Watching", null, false),
+        createBadgeHeader("On", null, false),
         createStateBody(
           "No public job date data found",
-          "JobDateLens is still active on this site. Open another job or check again.",
+          "Open another job or scan again.",
           false,
           {
-            label: "Check again",
-            callback: checkAgainCallback
+            label: "Scan again",
+            callback: scanAgainCallback
           }
         )
       );
@@ -3268,10 +3268,13 @@
         : getManualJsonLdGuard(pageRouteKey);
       var pageContext = getPageContext(document);
       var snapshot = scanDocument(document, pageContext);
+      // Unchanged JSON-LD only proves previous-route residue when it actually
+      // carries a JobPosting; unchanged non-job metadata is not a stale signal.
       var jsonLdUnchanged =
         Array.isArray(jsonLdGuard) &&
         jsonLdGuard.length > 0 &&
-        jsonLdTextsEqual(snapshot.jsonLdTexts, jsonLdGuard);
+        jsonLdTextsEqual(snapshot.jsonLdTexts, jsonLdGuard) &&
+        snapshot.result.candidates.length > 0;
       var routeAttestation = null;
       var notice;
 
@@ -3327,10 +3330,13 @@
     }
 
     function getLiveDomFailureNotice(liveFallback) {
+      // Proven previous-route residue fully explains the live DOM's rejected
+      // JobPosting (including its heading mismatch), so it must not block the
+      // fetched outcome; the residue stays in debug as unchanged-after-navigation.
       if (
         !liveFallback ||
-        (!liveFallback.stale &&
-          !hasUntrustedScanResult(liveFallback.snapshot.result))
+        liveFallback.stale ||
+        !hasUntrustedScanResult(liveFallback.snapshot.result)
       ) {
         return null;
       }

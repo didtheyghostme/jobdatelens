@@ -14,7 +14,7 @@ https://github.com/user-attachments/assets/eaa16414-8030-4939-9729-60d1cff5b36a
 
 ## Use
 
-JobDateLens does not watch a site until you explicitly activate it. You can activate it on an individual job or on a careers listing page:
+JobDateLens stays off on a site until you explicitly activate it. You can activate it on an individual job or on a careers listing page:
 
 - macOS: press `Command+Shift+E`.
 - Other platforms: press `Alt+Shift+E`.
@@ -27,11 +27,11 @@ This detects only JobDateLens's own unassigned Chrome extension command. Chrome 
 
 After activation, JobDateLens follows job pages in that tab while they remain on the same origin (protocol, hostname, and port), across both SPA navigation and full-page loads. It ignores fragments and known click-tracking parameters while preserving URL details that may identify a job.
 
-Toolbar or shortcut activation, **Check again**, and **Retry** always request fresh data. On automatic SPA navigation and completed same-origin page loads, non-Greenhouse pages may instead use structured job data already rendered by the browser—but only when exactly one posting matches both the visible job and the current URL. Otherwise JobDateLens immediately uses the fresh-data pipeline. Greenhouse remains API-first because its public API provides richer dates.
+Toolbar or shortcut activation and **Scan again** always request fresh data. On automatic SPA navigation and completed same-origin page loads, non-Greenhouse pages may instead use structured job data already rendered by the browser—but only when exactly one posting matches both the visible job and the current URL. Otherwise JobDateLens immediately uses the fresh-data pipeline. Greenhouse remains API-first because its public API provides richer dates.
 
 If a fresh lookup does not produce a trustworthy result, JobDateLens may re-check the page data once under the same verification rules. It rejects stale, mismatched, malformed, wrong-route, or ambiguous data rather than guessing. It does not poll, automatically retry, or revalidate a successful fast result in the background.
 
-If no public job dates are available, the panel keeps watching for the next same-origin job and offers **Check again**. Other failures offer **Retry** and **Close**. Pressing the shortcut or toolbar icon again refreshes the current route; it does not turn watching off. Pressing **Close**, closing the tab, leaving the origin, restarting the browser, or reloading/updating the extension ends the session. New tabs never inherit a session.
+If no public job dates are available, the panel shows the neutral **On** state with **No public job date data found**, whether you reached the page by SPA navigation or a direct load. The lens stays active for the next same-origin job and offers **Scan again**. Genuine technical failures show **Unavailable** with the specific reason, plus **Scan again** and **Close**. Pressing the shortcut or toolbar icon again refreshes the current route; it does not turn the lens off. Pressing **Close**, closing the tab, leaving the origin, restarting the browser, or reloading/updating the extension ends the session. New tabs never inherit a session.
 
 <details>
 <summary>Verification details</summary>
@@ -72,7 +72,7 @@ Run the automated tests with Node:
 npm test
 ```
 
-The suite covers route-attested SPA and full-page-load fast paths, fresh-first explicit actions, one-shot late DOM fallback, response redirect validation, visible `h1` and ARIA level-one verification, deterministic title matching, provider fallbacks, SPA and full-page same-origin navigation, memory-only tab sessions, exact-origin termination, stale-fingerprint rejection, rapid-navigation cancellation, neutral no-data behavior, Retry, Check again, Close, loading accessibility, reduced-motion styling, and badge layout. Parser cases include URL normalization and provider identifiers as well as standard JSON-LD, arrays, `@graph`, multiple/duplicate candidate rejection, generic headings, meaningful title symbols, missing or invalid dates, expired postings, malformed JSON, and non-job structured data.
+The suite covers route-attested SPA and full-page-load fast paths, fresh-first explicit actions, one-shot late DOM fallback, response redirect validation, visible `h1` and ARIA level-one verification, deterministic title matching, provider fallbacks, SPA and full-page same-origin navigation, memory-only tab sessions, exact-origin termination, stale-fingerprint rejection, rapid-navigation cancellation, neutral no-data behavior, Scan again, Close, loading accessibility, reduced-motion styling, and badge layout. Parser cases include URL normalization and provider identifiers as well as standard JSON-LD, arrays, `@graph`, multiple/duplicate candidate rejection, generic headings, meaningful title symbols, missing or invalid dates, expired postings, malformed JSON, and non-job structured data.
 
 For manual UI testing, select this repository folder in Chrome's **Load unpacked** dialog, activate JobDateLens on a careers listing or job posting, and use the site's own links to navigate between postings. Verify both SPA changes and a normal same-origin reload, then confirm that a new tab does not inherit the lens and a cross-origin navigation ends the session.
 

@@ -614,7 +614,7 @@ test("manual scans keep the panel visible and busy until the result is ready", a
   assert.ok(findButtonByTitle(badge, "Collapse JobDateLens"));
 });
 
-test("a clean no-data scan stays active in the neutral Watching state", async () => {
+test("a clean no-data scan stays active in the neutral On state", async () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   const pageUrl = "https://careers.example.com/openings";
   const emptyHtml = "careers-listing-html";
@@ -665,24 +665,24 @@ test("a clean no-data scan stays active in the neutral Watching state", async ()
 
   assert.equal(result.found, false);
   assert.equal(badge.attributes["aria-busy"], "false");
-  assert.match(getElementText(badge), /Watching/);
+  assert.match(getElementText(badge), /\bOn\b/);
   assert.match(getElementText(badge), /No public job date data found/);
   assert.match(
     getElementText(badge),
-    /JobDateLens is still active on this site\. Open another job or check again\./
+    /Open another job or scan again\./
   );
   assert.equal(findElement(badge, (element) => element.className === "jdl-spinner"), null);
   assert.equal(findButtonByTitle(badge, "Collapse JobDateLens"), null);
-  const checkAgainButton = findButtonByText(badge, "Check again");
-  assert.ok(checkAgainButton);
+  const scanAgainButton = findButtonByText(badge, "Scan again");
+  assert.ok(scanAgainButton);
   assert.ok(findButtonByTitle(badge, "Close JobDateLens"));
 
-  checkAgainButton.click();
-  checkAgainButton.click();
+  scanAgainButton.click();
+  scanAgainButton.click();
   await flushAsyncWork();
   assert.equal(fetchCalls, 2);
   badge = document.getElementById("jobdatelens-badge");
-  assert.match(getElementText(badge), /Watching/);
+  assert.match(getElementText(badge), /\bOn\b/);
 
   findButtonByTitle(badge, "Close JobDateLens").click();
   assert.equal(document.getElementById("jobdatelens-badge"), null);
@@ -769,7 +769,7 @@ test("a no-data listings page follows a later same-document job navigation", asy
   );
 });
 
-test("a technical failure keeps watching for the next same-document job", async () => {
+test("a technical failure keeps the lens on for the next same-document job", async () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   const failedUrl = "https://careers.example.com/unavailable";
   const jobUrl = "https://careers.example.com/jobs/recovered";
@@ -1779,7 +1779,11 @@ test("a route stale fingerprint survives fresh success and blocks a same-title l
   assert.equal(domAttempt.reason, "unchanged-after-navigation");
   assert.match(
     getElementText(document.getElementById("jobdatelens-badge")),
-    /Structured job data looks stale/
+    /Current page HTML could not be fetched/
+  );
+  assert.match(
+    getElementText(document.getElementById("jobdatelens-badge")),
+    /\(Network unavailable\)/
   );
 });
 
@@ -1985,7 +1989,11 @@ test("manual activation guards a changed route when its Navigation API event was
   assert.equal(domAttempt.reason, "unchanged-after-navigation");
   assert.match(
     getElementText(document.getElementById("jobdatelens-badge")),
-    /Structured job data looks stale/
+    /Current page HTML could not be fetched/
+  );
+  assert.match(
+    getElementText(document.getElementById("jobdatelens-badge")),
+    /\(Network unavailable\)/
   );
 });
 
@@ -2186,7 +2194,7 @@ test("rapid SPA navigation cancels old frames and discards late provider results
   assert.equal(frames.pendingCount(), 0);
 });
 
-test("failed SPA refresh offers one user-triggered Retry and keeps Close available", async () => {
+test("SPA navigation to a clean no-data destination stays On and Scan again recovers", async () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   const routeA =
     "https://jobs.ashbyhq.com/meticulous/e6d1e0ab-8a28-49ee-94ed-d232886cd7d5";
@@ -2266,19 +2274,26 @@ test("failed SPA refresh offers one user-triggered Retry and keeps Close availab
   assert.equal(fetchCalls, 2);
   assert.equal(routeBFetchCalls, 1);
   assert.equal(badge.attributes["aria-busy"], "false");
-  assert.match(getElementText(badge), /Couldn’t load job dates/);
-  assert.match(getElementText(badge), /Structured job data looks stale/);
+  assert.match(getElementText(badge), /\bOn\b/);
+  assert.match(getElementText(badge), /No public job date data found/);
+  assert.ok(!getElementText(badge).includes(titleA));
+  const noDataDebug = fakeWindow.JobDateLens.getLastScanDebug();
+  assert.ok(
+    noDataDebug.attempts.some(
+      (attempt) => attempt.reason === "unchanged-after-navigation"
+    )
+  );
   assert.ok(findButtonByTitle(badge, "Close JobDateLens"));
-  const retryButton = findButtonByText(badge, "Retry");
-  assert.ok(retryButton);
+  const scanAgainButton = findButtonByText(badge, "Scan again");
+  assert.ok(scanAgainButton);
 
   setFakeJobPage(document, titleB, {
     jsonLdText: createJobPostingJsonLd(titleB, "2026-01-01", "Meticulous", {
       url: routeB
     })
   });
-  retryButton.click();
-  retryButton.click();
+  scanAgainButton.click();
+  scanAgainButton.click();
   badge = document.getElementById("jobdatelens-badge");
   assert.equal(badge.attributes["aria-busy"], "true");
   assert.equal(fetchCalls, 3);
@@ -2290,7 +2305,7 @@ test("failed SPA refresh offers one user-triggered Retry and keeps Close availab
   assert.equal(routeBFetchCalls, 2);
   assert.equal(badge.attributes["aria-busy"], "false");
   assert.match(getElementText(badge), new RegExp(titleB));
-  assert.equal(findButtonByText(badge, "Retry"), null);
+  assert.equal(findButtonByText(badge, "Scan again"), null);
   assert.equal(fakeWindow.JobDateLens.getLastScanDebug().selectedSource, "html-fallback");
   assert.equal(
     fakeWindow.JobDateLens.getLastScanDebug().attempts.find(
@@ -2298,6 +2313,167 @@ test("failed SPA refresh offers one user-triggered Retry and keeps Close availab
     ),
     undefined
   );
+});
+
+test("SPA navigation between routes without JSON-LD stays On and matches a direct rescan", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const routeA = "https://careers.example.com/teams/engineering";
+  const routeB = "https://careers.example.com/teams/design";
+  const emptyHtmlA = "no-jsonld-team-a-html";
+  const emptyHtmlB = "no-jsonld-team-b-html";
+  const document = createFakeDocument();
+  const navigation = createFakeNavigation(routeA);
+  const frames = createAnimationFrameHarness();
+  const requests = [];
+
+  setFakeJobPage(document, "Engineering roles", { jsonLdText: "" });
+  const fakeWindow = {
+    location: { href: routeA },
+    navigation,
+    requestAnimationFrame: frames.requestAnimationFrame,
+    cancelAnimationFrame: frames.cancelAnimationFrame,
+    setTimeout,
+    clearTimeout,
+    fetch(url) {
+      requests.push(url);
+      return Promise.resolve({
+        ok: true,
+        text() {
+          return Promise.resolve(url === routeA ? emptyHtmlA : emptyHtmlB);
+        }
+      });
+    }
+  };
+  const context = vm.createContext({
+    console,
+    document,
+    DOMParser: createMappedDomParser({
+      [emptyHtmlA]: { title: "Engineering roles", jsonLdText: "" },
+      [emptyHtmlB]: { title: "Design roles", jsonLdText: "" }
+    }),
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+  const activation = await fakeWindow.JobDateLens.scanOnce();
+  assert.equal(activation.found, false);
+
+  navigation.dispatch("navigate", {
+    destination: { url: routeB, sameDocument: true },
+    hashChange: false
+  });
+  fakeWindow.location.href = routeB;
+  navigation.currentEntry.url = routeB;
+  setFakeJobPage(document, "Design roles", { jsonLdText: "" });
+  navigation.dispatch("navigatesuccess");
+  frames.runNext();
+  await flushAsyncWork();
+
+  let badge = document.getElementById("jobdatelens-badge");
+  assert.deepEqual(requests, [routeA, routeB]);
+  assert.equal(badge.attributes["aria-busy"], "false");
+  assert.match(getElementText(badge), /\bOn\b/);
+  assert.match(getElementText(badge), /No public job date data found/);
+  assert.ok(!getElementText(badge).includes("Structured job data looks stale"));
+  assert.ok(!getElementText(badge).includes("Couldn’t load job dates"));
+  assert.ok(
+    !fakeWindow.JobDateLens.getLastScanDebug().attempts.some(
+      (attempt) => attempt.reason === "unchanged-after-navigation"
+    )
+  );
+
+  const directRescan = await fakeWindow.JobDateLens.scanOnce();
+  badge = document.getElementById("jobdatelens-badge");
+
+  assert.equal(directRescan.found, false);
+  assert.deepEqual(requests, [routeA, routeB, routeB]);
+  assert.match(getElementText(badge), /\bOn\b/);
+  assert.match(getElementText(badge), /No public job date data found/);
+  assert.ok(findButtonByText(badge, "Scan again"));
+});
+
+test("unchanged sitewide non-job JSON-LD is not treated as stale after navigation", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+  const routeA = "https://careers.example.com/jobs/platform-engineer";
+  const routeB = "https://careers.example.com/openings";
+  const titleA = "Platform Engineer";
+  const jobHtml = "org-jsonld-job-html";
+  const emptyHtml = "org-jsonld-listing-html";
+  const orgJsonLd = JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    name: "Meticulous"
+  });
+  const document = createFakeDocument();
+  const navigation = createFakeNavigation(routeA);
+  const frames = createAnimationFrameHarness();
+  const requests = [];
+
+  setFakeJobPage(document, titleA, { jsonLdText: orgJsonLd });
+  const fakeWindow = {
+    location: { href: routeA },
+    navigation,
+    requestAnimationFrame: frames.requestAnimationFrame,
+    cancelAnimationFrame: frames.cancelAnimationFrame,
+    setTimeout,
+    clearTimeout,
+    fetch(url) {
+      requests.push(url);
+      return Promise.resolve({
+        ok: true,
+        text() {
+          return Promise.resolve(url === routeA ? jobHtml : emptyHtml);
+        }
+      });
+    }
+  };
+  const context = vm.createContext({
+    console,
+    document,
+    DOMParser: createMappedDomParser({
+      [jobHtml]: {
+        title: titleA,
+        jsonLdText: createJobPostingJsonLd(titleA, "2026-06-01")
+      },
+      [emptyHtml]: { title: "Open positions", jsonLdText: "" }
+    }),
+    URL,
+    window: fakeWindow
+  });
+
+  vm.runInContext(source, context);
+  const activation = await fakeWindow.JobDateLens.scanOnce();
+  assert.equal(activation.found, true);
+  assert.match(
+    getElementText(document.getElementById("jobdatelens-badge")),
+    new RegExp(titleA)
+  );
+
+  navigation.dispatch("navigate", {
+    destination: { url: routeB, sameDocument: true },
+    hashChange: false
+  });
+  fakeWindow.location.href = routeB;
+  navigation.currentEntry.url = routeB;
+  setFakeJobPage(document, "Open positions", { jsonLdText: orgJsonLd });
+  navigation.dispatch("navigatesuccess");
+  frames.runNext();
+  await flushAsyncWork();
+
+  const badge = document.getElementById("jobdatelens-badge");
+  assert.deepEqual(requests, [routeA, routeB]);
+  assert.equal(badge.attributes["aria-busy"], "false");
+  assert.match(getElementText(badge), /\bOn\b/);
+  assert.match(getElementText(badge), /No public job date data found/);
+  assert.ok(!getElementText(badge).includes("Structured job data looks stale"));
+  assert.ok(!getElementText(badge).includes(titleA));
+  assert.ok(
+    !fakeWindow.JobDateLens.getLastScanDebug().attempts.some(
+      (attempt) => attempt.reason === "unchanged-after-navigation"
+    )
+  );
+  assert.ok(findButtonByText(badge, "Scan again"));
 });
 
 test("scanOnce treats failed HTML fallback after navigation as superseded", async () => {
@@ -3086,7 +3262,7 @@ test("scanOnce treats derived YC JobPosting HTML without datePosted as no data",
   assert.equal(badge.tagName, "ASIDE");
   assert.equal(badge.attributes["aria-busy"], "false");
   assert.match(getElementText(badge), /Couldn’t load job dates/);
-  assert.ok(findButtonByText(badge, "Retry"));
+  assert.ok(findButtonByText(badge, "Scan again"));
   assert.equal(document.getElementById("jobdatelens-notice"), null);
 });
 

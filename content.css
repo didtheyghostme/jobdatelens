@@ -110,7 +110,7 @@
   background: #dbeafe;
 }
 
-#jobdatelens-badge.jdl-status--watching .jdl-status {
+#jobdatelens-badge.jdl-status--on .jdl-status {
   color: #37516f;
   background: #e7edf4;
 }

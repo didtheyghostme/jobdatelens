@@ -4,6 +4,12 @@ function json(value) {
   return JSON.stringify(value);
 }
 
+// Browser fixtures render against the real clock, so a deadline that must stay
+// "valid" is computed relative to now instead of hardcoded.
+function futureIsoDate(daysAhead) {
+  return new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000).toISOString();
+}
+
 function jobPosting(overrides) {
   return Object.assign(
     {
@@ -209,7 +215,7 @@ const browserFixtures = [
         company_name: "MongoDB",
         first_published: "2026-05-14T10:00:00-04:00",
         updated_at: "2026-06-12T16:30:00-04:00",
-        application_deadline: "2026-08-01T23:59:59-04:00"
+        application_deadline: futureIsoDate(365)
       }
     },
     expected: {
